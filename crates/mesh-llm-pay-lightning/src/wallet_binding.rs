@@ -75,7 +75,12 @@ async fn open_handle(
                 binding: binding.to_owned(),
                 handle: None,
                 operation: String::new(),
-                input_json: String::new(),
+                // The wallet plugin's state lives under the ledger directory,
+                // one subdirectory per wallet plugin (`wallets/<plugin>`): the
+                // host appends the bound provider's name. Same layout as
+                // built-in payments, so an existing wallet is found again.
+                input_json: serde_json::json!({ "directory": directory.join("wallets") })
+                    .to_string(),
             })
             .await?;
         if matches!(response, BoundOperationResponse::NotDispatched { .. })

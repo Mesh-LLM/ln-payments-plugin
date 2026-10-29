@@ -35,6 +35,22 @@ pub(crate) fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
         )
         .item(hook)
         .item(mesh_channel(CHANNEL))
+        .operation_binding(mesh_llm_plugin::operation_binding(
+            "wallet",
+            "wallet.v1",
+            "wallet_open",
+            [
+                "wallet_balance",
+                "wallet_transactions",
+                "wallet_create_invoice",
+                "wallet_pay",
+                "wallet_lookup",
+                "wallet_wait_for_payment",
+                "wallet_wait_for_arrival",
+            ],
+            true,
+        ))
+        .peer_blocks()
         .item(mesh_event_peer_up())
         .item(mesh_event_peer_down())
         .build()
@@ -91,10 +107,12 @@ async fn run_with_context(
     let engine = Arc::new(engine);
 
     let metadata = payment_metadata(&name, version, manifest);
+    let operations = control_operations(engine.clone());
     let messages = engine.clone();
     let events = engine.clone();
     let startup = engine.clone();
     let plugin = SimplePlugin::new(metadata)
+        .with_operation_router(operations)
         // After the handshake: opening a wallet must not consume the host's
         // initialize-response timeout. Manifest inspection never reaches here.
         .on_initialized(move |context| {
@@ -336,6 +354,38 @@ async fn send(context: &mut PluginContext<'_>, peer: &str, message: &Message) ->
 }
 fn record_error(error: &anyhow::Error) {
     crate::diagnostics::record_error(error);
+}
+
+/// The operator surface `mesh-llm wallet …` forwards to: one published
+/// operation taking a `ControlCommand`. Peers never reach it; the host only
+/// dispatches published operations from its local API.
+fn control_operations(engine: Arc<Engine>) -> mesh_llm_plugin::OperationRouter {
+    let mut operations = mesh_llm_plugin::OperationRouter::new();
+    operations.add_raw(
+        mesh_llm_plugin::operation_with_schema(
+            "control",
+            "Run one local operator command (balance, fund, send, policy, pricing, …).",
+            serde_json::Map::new(),
+        ),
+        move |request, _context| {
+            let engine = engine.clone();
+            Box::pin(async move {
+                let command: mesh_llm_payments::control::ControlCommand = request.arguments()?;
+                // Durable settlement continues even if the caller goes away.
+                let result = tokio::spawn(async move { engine.service.control(command).await })
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error))
+                    .and_then(|result| result);
+                Ok(match result {
+                    Ok(value) => rmcp::model::CallToolResult::structured(value),
+                    Err(error) => rmcp::model::CallToolResult::structured_error(
+                        serde_json::json!({ "message": error.to_string() }),
+                    ),
+                })
+            })
+        },
+    );
+    operations
 }
 
 fn payment_metadata(

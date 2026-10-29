@@ -12,10 +12,29 @@ plugins may have different names; existing compatible wallet binaries need not
 be rebuilt. `run(name, version, factory, config)` remains for in-process fixtures;
 the installed executable uses `run_bound` and the host-owned wallet connection.
 
-## Explicit operator binding
+## Zero-config install
 
-Install and enable the wallet and utility separately. The host passes the three
-declared utility settings in `MESH_LLM_PLUGIN_SETTINGS_JSON`. Example host config:
+`mesh-llm plugins install <pay-lightning archive>` plus one installed `wallet.v1`
+plugin (for example `Mesh-LLM/lexe-wallet`, unchanged) is the whole setup, as it
+was when payments were built into mesh-llm:
+
+- The package manifest asks the host for a `wallet.v1` binding named `wallet`,
+  the exchange hook and peer-block permission. Installing is the consent; the
+  host grants them without any `[[plugin]]` stanza.
+- The host binds the single running wallet plugin on first use and stays with it.
+  Two running wallet plugins are refused until the operator names one (below).
+- With no settings the utility uses `~/.mesh-llm/payments/`: `payment.json`
+  (created with non-spending defaults), the ledger, `wallet-provider.json` and
+  `wallets/<wallet plugin>/` as the wallet's data directory — the same layout as
+  built-in payments, so an existing wallet is found again. First wallet
+  adoption is allowed (`allow_wallet_provisioning` defaults to `true`).
+- `mesh-llm wallet balance|fund|send|transactions|policy|pricing|…` forward to
+  this plugin's published `control` operation over the node's local API.
+
+## Explicit operator binding (optional)
+
+A `[[plugin]]` entry overrides any of the above: the three settings in
+`MESH_LLM_PLUGIN_SETTINGS_JSON`, and a named provider binding:
 
 ```toml
 [[plugin]]
@@ -32,10 +51,9 @@ setup_input_json = '{"directory":"/absolute/existing/wallet-state"}'
 operations = ["wallet_balance", "wallet_transactions", "wallet_create_invoice", "wallet_pay", "wallet_lookup", "wallet_wait_for_payment", "wallet_wait_for_arrival"]
 ```
 
-The host also needs the explicit required exchange grant described below. The
-binding exclusively selects one provider and fixes the open payload. The utility
-cannot choose a wallet executable or supply an open directory. The host alone
-launches and supervises the wallet; killing the utility does not kill that wallet.
+A named binding exclusively selects one provider and fixes the open payload; the
+utility then cannot supply an open directory. The host alone launches and
+supervises the wallet; killing the utility does not kill that wallet.
 
 `config_path` points to a separate payment JSON file:
 
