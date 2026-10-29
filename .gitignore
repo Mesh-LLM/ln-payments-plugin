@@ -1,3 +1,5 @@
 target/
 *.tar.gz
 .DS_Store
+.scratch/
+dist/

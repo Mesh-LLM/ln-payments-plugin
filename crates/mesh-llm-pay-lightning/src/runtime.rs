@@ -53,8 +53,18 @@ pub(crate) fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
         .peer_blocks()
         .item(mesh_event_peer_up())
         .item(mesh_event_peer_down())
+        // Published so the host's local API (`mesh-llm wallet …`) may dispatch it;
+        // the host refuses operations a manifest does not list.
+        .item(mesh_llm_plugin::operation::<serde_json::Value>(
+            CONTROL_OPERATION,
+            CONTROL_DESCRIPTION,
+        ))
         .build()
 }
+
+const CONTROL_OPERATION: &str = "control";
+const CONTROL_DESCRIPTION: &str =
+    "Run one local operator command (balance, fund, send, policy, pricing, …).";
 
 /// Run the payment protocol with an in-process wallet adapter. Manifest inspection
 /// is handled before reading configuration or opening any state.
@@ -363,8 +373,8 @@ fn control_operations(engine: Arc<Engine>) -> mesh_llm_plugin::OperationRouter {
     let mut operations = mesh_llm_plugin::OperationRouter::new();
     operations.add_raw(
         mesh_llm_plugin::operation_with_schema(
-            "control",
-            "Run one local operator command (balance, fund, send, policy, pricing, …).",
+            CONTROL_OPERATION,
+            CONTROL_DESCRIPTION,
             serde_json::Map::new(),
         ),
         move |request, _context| {
@@ -436,7 +446,15 @@ mod tests {
     #[test]
     fn manifest_requests_only_required_gate_metadata_and_channel() {
         let manifest = manifest("x-plugin-7061792d6c696768746e696e67-pay-terms");
-        assert!(manifest.operations.is_empty());
+        // Only the operator control surface is published; peers never reach it.
+        assert_eq!(
+            manifest
+                .operations
+                .iter()
+                .map(|operation| operation.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![CONTROL_OPERATION]
+        );
         let hook = manifest.openai_exchange_hook.unwrap();
         assert!(hook.required && hook.admission && hook.metadata);
         assert!(!hook.request_body && !hook.response_body && !hook.delegate_signing_key);
