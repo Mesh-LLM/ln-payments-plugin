@@ -23,7 +23,8 @@ use anyhow::{Context, Result, ensure};
 pub use config::Config;
 use mesh_llm_payments::service::PaymentService;
 use mesh_llm_payments_types::{
-    contract::*, metered_wire::AdmissionTerms, pricing::Pricing, terms::RequestTerms,
+    contract::*, intent::PaymentIntent, metered_wire::AdmissionTerms, pricing::Pricing,
+    terms::RequestTerms,
 };
 use mesh_llm_plugin::openai_exchange::{
     OpenAiAdmissionDecision as Decision, OpenAiExchangeDecision,
@@ -183,58 +184,7 @@ impl Engine {
             }
             Message::Quote => self.quote(peer).await,
             Message::Admission { terms, invoice } => {
-                ensure!(self.cap_msat > 0, "buyer payments disabled");
-                ensure!(self.buy_peers.contains(peer), "seller not authorized");
-                let ceiling = self
-                    .buying
-                    .get(&terms.model)
-                    .context("model not authorized for purchases")?;
-                ensure!(
-                    terms.pricing.input_msat_per_million <= ceiling.input_msat_per_million
-                        && terms.pricing.output_msat_per_million <= ceiling.output_msat_per_million
-                        && terms.pricing.cache_discount_percent >= ceiling.cache_discount_percent,
-                    "seller rates exceed authorized ceiling"
-                );
-                let stored = self.service.ledger.request_terms(&terms.id)?;
-                let proposed = RequestTerms {
-                    exchange_id: None,
-                    id: terms.id.clone(),
-                    peer: peer.into(),
-                    payee: None,
-                    model: terms.model.clone(),
-                    pricing: terms.pricing.clone(),
-                    max_output_tokens: 1,
-                    max_total_msat: self.cap_msat,
-                    expires_at_ms: mesh_llm_wallet::now_ms() + 60_000,
-                };
-                let proposed = if let Some(stored) = stored {
-                    ensure!(
-                        stored.peer == peer
-                            && stored.model == terms.model
-                            && stored.pricing == terms.pricing,
-                        "admission owner or terms changed"
-                    );
-                    stored
-                } else {
-                    proposed
-                };
-
-                self.service
-                    .accept_admission(AcceptAdmissionRequest {
-                        billing_revision: BillingRevision::V3,
-                        terms: proposed,
-                        admission: terms.clone(),
-                    })
-                    .await?;
-                if let Some(invoice) = invoice {
-                    self.service
-                        .pay_deposit(PayDepositRequest {
-                            request_id: terms.id.clone(),
-                            invoice,
-                        })
-                        .await?;
-                }
-                Ok(vec![Message::Paid { id: terms.id }])
+                self.accept_admission(peer, terms, invoice).await
             }
             Message::Paid { id } => {
                 self.owner(peer, &id)?;
@@ -306,6 +256,62 @@ impl Engine {
             Message::Ready { id } => self.receive_ready(peer, id),
         }
     }
+    /// Buyer side of a quoted admission: authorize against policy, pin the
+    /// terms, pay any deposit, and tell the seller it is paid.
+    async fn accept_admission(
+        &self,
+        peer: &str,
+        terms: AdmissionTerms,
+        invoice: Option<Invoice>,
+    ) -> Result<Vec<Message>> {
+        // Only a seller this node quoted may be admitted: an unsolicited
+        // admission from any other peer never reaches the wallet.
+        ensure!(
+            self.buy_peers.contains(peer) || self.connected.is_connected(peer),
+            "seller not authorized"
+        );
+        let cap = self.buyer_cap(peer, &terms.model, &terms.pricing).await?;
+        let stored = self.service.ledger.request_terms(&terms.id)?;
+        let proposed = RequestTerms {
+            exchange_id: None,
+            id: terms.id.clone(),
+            peer: peer.into(),
+            payee: None,
+            model: terms.model.clone(),
+            pricing: terms.pricing.clone(),
+            max_output_tokens: 1,
+            max_total_msat: cap,
+            expires_at_ms: mesh_llm_wallet::now_ms() + 60_000,
+        };
+        let proposed = if let Some(stored) = stored {
+            ensure!(
+                stored.peer == peer
+                    && stored.model == terms.model
+                    && stored.pricing == terms.pricing,
+                "admission owner or terms changed"
+            );
+            stored
+        } else {
+            proposed
+        };
+
+        self.service
+            .accept_admission(AcceptAdmissionRequest {
+                billing_revision: BillingRevision::V3,
+                terms: proposed,
+                admission: terms.clone(),
+            })
+            .await?;
+        if let Some(invoice) = invoice {
+            self.service
+                .pay_deposit(PayDepositRequest {
+                    request_id: terms.id.clone(),
+                    invoice,
+                })
+                .await?;
+        }
+        Ok(vec![Message::Paid { id: terms.id }])
+    }
     fn receive_ready(&self, peer: &str, id: String) -> Result<Vec<Message>> {
         let terms = self
             .service
@@ -322,8 +328,55 @@ impl Engine {
         }
         Ok(vec![])
     }
+    /// Whether this node may buy from `peer` right now: the ledger's spending
+    /// policy is automatic with budget left today (as built-in payments
+    /// decided it), narrowed to `buy_peers` when the operator listed any.
+    pub async fn buyer_enabled(&self, peer: &str) -> bool {
+        if !self.buy_peers.is_empty() && !self.buy_peers.contains(peer) {
+            return false;
+        }
+        let budget = self
+            .service
+            .routing_budget(RoutingBudgetRequest {
+                request_intent: None,
+            })
+            .await;
+        matches!(budget.intent, PaymentIntent::AllowPaid { .. }) && budget.available_msat > 0
+    }
+    /// The most one admission with `peer` may cost, or why it is refused. A
+    /// configured ceiling for the model bounds the seller's rates; otherwise
+    /// the policy's intent does (it permits any rate, bounded by the budget).
+    async fn buyer_cap(&self, peer: &str, model: &str, pricing: &Pricing) -> Result<u64> {
+        ensure!(self.buyer_enabled(peer).await, "seller not authorized");
+        if let Some(ceiling) = self.buying.get(model) {
+            ensure!(
+                pricing.input_msat_per_million <= ceiling.input_msat_per_million
+                    && pricing.output_msat_per_million <= ceiling.output_msat_per_million
+                    && pricing.cache_discount_percent >= ceiling.cache_discount_percent,
+                "seller rates exceed authorized ceiling"
+            );
+        }
+        let budget = self
+            .service
+            .routing_budget(RoutingBudgetRequest {
+                request_intent: None,
+            })
+            .await;
+        let PaymentIntent::AllowPaid { max_total_msat, .. } = budget.intent else {
+            anyhow::bail!("paid inference is disabled by free-only policy");
+        };
+        ensure!(
+            budget.intent.permits(pricing),
+            "seller rates exceed the spending policy"
+        );
+        Ok(if self.cap_msat > 0 {
+            self.cap_msat.min(max_total_msat)
+        } else {
+            max_total_msat
+        })
+    }
     pub async fn peer_up(&self, peer: &str) -> Result<Vec<Message>> {
-        if !self.buy_peers.contains(peer) || self.cap_msat == 0 {
+        if !self.buyer_enabled(peer).await {
             return Ok(vec![]);
         }
         // Only discovery/reconnect reconciles uncertain submissions. Holding this
@@ -455,8 +508,7 @@ impl Engine {
         model: &str,
         deadline: std::time::Duration,
     ) -> Result<OpenAiExchangeDecision> {
-        ensure!(self.buy_peers.contains(peer), "seller not authorized");
-        ensure!(self.buying.contains_key(model), "model not authorized");
+        ensure!(self.buyer_enabled(peer).await, "seller not authorized");
         let key = (peer.to_owned(), model.to_owned());
         let until = tokio::time::Instant::now() + deadline;
         loop {

@@ -104,9 +104,16 @@ async fn verify_unopened(stream: &mut LocalStream) {
     assert_eq!(response.plugin_id, "pay-lightning");
     assert!(!response.capabilities.iter().any(|s| s == "wallet.v1"));
     let manifest = response.manifest.unwrap();
-    assert!(
-        manifest.operations.is_empty(),
-        "wallet must not advertise MCP tools"
+    // The operator `control` operation (the `mesh-llm wallet …` forward) is the
+    // only published operation; the wallet advertises no MCP tools.
+    assert_eq!(
+        manifest
+            .operations
+            .iter()
+            .map(|operation| operation.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["control"],
+        "wallet must publish only the control operation"
     );
     assert!(manifest.http_bindings.is_empty());
     assert_eq!(manifest.mesh_channels[0].name, "pay.ln.v1");

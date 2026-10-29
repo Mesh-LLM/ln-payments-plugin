@@ -404,6 +404,64 @@ async fn rates_above_local_ceiling_do_not_pay() {
     assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
 }
 
+/// Built-in payments paid any seller under `policy automatic` within the
+/// daily budget, with no per-seller or per-model configuration. The plugin
+/// keeps that: an unconfigured buyer pays a seller it quoted, is capped by the
+/// budget, refuses an unsolicited admission from a peer it never quoted, and
+/// buys nothing under the default free-only policy.
+#[tokio::test]
+async fn unconfigured_buyer_pays_under_automatic_policy_only_sellers_it_quoted() {
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    f.buyer.buy_peers.clear();
+    f.buyer.cap_msat = 0;
+    assert!(f.buyer.buyer_enabled("seller").await);
+    // No handshake with this seller yet: its admission is refused unpaid.
+    let unsolicited = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(f.buyer.channel("seller", unsolicited).await.is_err());
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+    // Selecting the seller as a backend starts the handshake; its quote is paid.
+    let hello = f.buyer.peer_up("seller").await.unwrap();
+    assert!(matches!(hello.first(), Some(Message::Hello { .. })));
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    let Message::Admission { terms, .. } = &admission else {
+        unreachable!()
+    };
+    let id = terms.id.clone();
+    let paid = f
+        .buyer
+        .channel("seller", admission)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(matches!(paid, Message::Paid { .. }));
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1);
+    // The admission is capped by the policy budget, not a static cap.
+    let terms = f.buyer.service.ledger.request_terms(&id).unwrap().unwrap();
+    assert_eq!(terms.max_total_msat, 100_000);
+    // Free-only policy buys nothing, from anyone.
+    f.buyer
+        .service
+        .ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::FreeOnly,
+            daily_budget_msat: None,
+        })
+        .unwrap();
+    assert!(!f.buyer.buyer_enabled("seller").await);
+    assert!(f.buyer.peer_up("other").await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn repeated_quote_returns_same_unconsumed_invoice() {
     let f = Fixture::new();

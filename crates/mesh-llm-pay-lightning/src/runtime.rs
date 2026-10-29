@@ -261,8 +261,7 @@ async fn run_with_context(
                 }
                 if event["phase"] == "backend_selected"
                     && let Some(peer) = event["target_peer_id"].as_str()
-                    && engine.cap_msat > 0
-                    && engine.buy_peers.contains(peer)
+                    && engine.buyer_enabled(peer).await
                 {
                     let result: Result<_> = async {
                         let model = event["model"].as_str().context("selected model missing")?;

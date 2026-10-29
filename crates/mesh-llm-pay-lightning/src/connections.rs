@@ -22,6 +22,14 @@ impl Connections {
         state.1 = true;
         true
     }
+    /// A handshake this node initiated completed and the peer is still up.
+    pub(crate) fn is_connected(&self, peer: &str) -> bool {
+        self.peers
+            .lock()
+            .unwrap()
+            .get(peer)
+            .is_some_and(|(_, connected)| *connected)
+    }
     pub(crate) fn disconnect(&self, peer: &str) {
         let mut peers = self.peers.lock().unwrap();
         let state = peers.entry(peer.into()).or_default();
