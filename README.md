@@ -20,7 +20,7 @@ baseline, not a readiness claim.
 | `mesh-llm-pay-lightning` | the plugin binary (`pay-lightning`) — [crate README](crates/mesh-llm-pay-lightning/README.md) |
 
 mesh-llm SDK crates (`mesh-llm-plugin`, `mesh-llm-events`,
-`mesh-llm-plugin-manager`) are git dependencies pinned to #2654 head
+`mesh-llm-plugin-manager`) are git dependencies pinned to #2654 commit
 `eba2a8ecf`. Wallet plugins (`Mesh-LLM/lexe-wallet`, nwc, ldk) are separate
 repositories and are unchanged.
 
