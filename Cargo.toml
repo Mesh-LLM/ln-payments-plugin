@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/mesh-llm-wallet",
+    "crates/mesh-llm-payments-types",
+    "crates/mesh-llm-payments",
+    "crates/mesh-llm-pay-lightning",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+version = "0.78.0"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+too_many_lines = "warn"
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

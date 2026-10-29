@@ -1,0 +1,511 @@
+ Downloading crates ...
+  Downloaded aws-lc-rs v1.19.0
+  Downloaded typed-path v0.13.0
+  Downloaded xattr v1.7.0
+  Downloaded zip v9.1.3
+  Downloaded aws-lc-sys v0.47.0
+   Compiling libc v0.2.191
+   Compiling cfg-if v1.0.5
+   Compiling bitflags v2.13.2
+   Compiling itoa v1.0.18
+   Compiling log v0.4.34
+   Compiling equivalent v1.0.3
+   Compiling smallvec v1.16.4
+   Compiling memchr v2.8.3
+   Compiling scopeguard v1.2.0
+   Compiling pin-project-lite v0.2.17
+   Compiling bytes v1.12.1
+   Compiling serde_core v1.0.229
+   Compiling anyhow v1.0.104
+   Compiling foldhash v0.2.0
+   Compiling allocator-api2 v0.2.21
+   Compiling zmij v1.0.23
+   Compiling either v1.19.0
+   Compiling typenum v1.20.1
+   Compiling once_cell v1.21.4
+   Compiling lock_api v0.4.14
+   Compiling zerofrom v0.1.8
+   Compiling stable_deref_trait v1.2.1
+   Compiling core-foundation-sys v0.8.7
+   Compiling futures-core v0.3.34
+   Compiling bitcoin-io v0.1.101
+   Compiling yoke v0.8.4
+   Compiling const-oid v0.10.2
+   Compiling arrayvec v0.7.8
+   Compiling futures-sink v0.3.34
+   Compiling fastrand v2.5.0
+   Compiling hex v0.4.3
+   Compiling hashbrown v0.17.1
+   Compiling strsim v0.11.1
+   Compiling bitcoin v0.32.102
+   Compiling zerovec v0.11.9
+   Compiling hex-conservative v0.2.3
+   Compiling slab v0.4.12
+   Compiling hex_lit v0.1.1
+   Compiling futures-channel v0.3.34
+   Compiling itertools v0.14.0
+   Compiling bech32 v0.11.1
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling bitcoin-units v0.1.101
+   Compiling darling_core v0.24.1
+   Compiling httparse v1.10.1
+   Compiling zerotrie v0.2.5
+   Compiling futures-task v0.3.34
+   Compiling utf8_iter v1.0.4
+   Compiling dunce v1.0.5
+   Compiling fs_extra v1.3.0
+   Compiling unicode-segmentation v1.13.3
+   Compiling futures-io v0.3.34
+   Compiling tracing-core v0.1.36
+   Compiling hybrid-array v0.4.15
+   Compiling tinystr v0.8.5
+   Compiling potential_utf v0.1.6
+   Compiling futures-util v0.3.34
+   Compiling indexmap v2.14.2
+   Compiling thiserror v2.0.21
+   Compiling icu_normalizer_data v2.4.0
+   Compiling jobserver v0.1.35
+   Compiling icu_collections v2.4.0
+   Compiling errno v0.3.14
+   Compiling icu_properties_data v2.4.0
+   Compiling percent-encoding v2.3.2
+   Compiling icu_locale_core v2.4.0
+   Compiling rustix v1.1.6
+   Compiling aws-lc-rs v1.19.0
+   Compiling tracing v0.1.44
+   Compiling cc v1.10.0
+   Compiling http v1.5.0
+   Compiling castaway v0.2.4
+   Compiling ryu v1.0.23
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling unicode-width v0.2.3
+   Compiling zeroize v1.9.1
+   Compiling static_assertions v1.1.0
+   Compiling petgraph v0.8.3
+   Compiling winnow v1.0.4
+   Compiling compact_str v0.9.1
+   Compiling strum v0.28.0
+   Compiling form_urlencoded v1.2.2
+   Compiling convert_case v0.10.0
+   Compiling prost-derive v0.14.4
+   Compiling kasuari v0.4.13
+   Compiling bitcoin_hashes v0.14.101
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.154
+   Compiling mio v1.2.4
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot_core v0.9.12
+   Compiling socket2 v0.6.5
+   Compiling cpufeatures v0.3.1
+   Compiling digest v0.11.3
+   Compiling getrandom v0.4.3
+   Compiling parking_lot v0.12.5
+   Compiling sha2 v0.11.1
+   Compiling cmake v0.1.58
+   Compiling icu_provider v2.4.0
+   Compiling tempfile v3.27.0
+   Compiling unicode-truncate v2.0.1
+   Compiling tokio v1.54.1
+   Compiling base58ck v0.1.101
+   Compiling icu_properties v2.4.0
+   Compiling icu_normalizer v2.4.0
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling lru v0.18.5
+   Compiling critical-section v1.2.0
+   Compiling base64 v0.23.1
+   Compiling option-ext v0.2.0
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling ratatui-core v0.1.2
+   Compiling signal-hook v0.3.18
+   Compiling dirs-sys v0.5.0
+   Compiling secp256k1-sys v0.10.1
+   Compiling aws-lc-sys v0.47.0
+   Compiling libsqlite3-sys v0.38.2
+   Compiling num_threads v0.1.8
+   Compiling prost v0.14.4
+   Compiling serde_spanned v1.1.2
+   Compiling derive_more-impl v2.1.1
+   Compiling http-body v1.1.0
+   Compiling num-traits v0.2.19
+   Compiling rustls-pki-types v1.15.1
+   Compiling iana-time-zone v0.1.65
+   Compiling system-configuration-sys v0.6.0
+   Compiling darling_macro v0.24.1
+   Compiling untrusted v0.9.0
+   Compiling time-core v0.1.9
+   Compiling powerfmt v0.2.1
+   Compiling utf8parse v0.2.2
+   Compiling num-conv v0.2.2
+   Compiling deranged v0.5.9
+   Compiling rustls v0.23.46
+   Compiling anstyle-parse v1.0.0
+   Compiling signal-hook-mio v0.2.5
+   Compiling darling v0.24.1
+   Compiling dirs v6.0.0
+   Compiling idna_adapter v1.2.2
+   Compiling uuid v1.29.0
+   Compiling chrono v0.4.45
+   Compiling skippy-model-ref v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling derive_more v2.1.1
+   Compiling idna v1.1.0
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling prost-types v0.14.4
+   Compiling hashlink v0.12.2
+   Compiling line-clipping v0.3.8
+   Compiling url v2.5.8
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling anstyle v1.0.14
+   Compiling tower-service v0.3.3
+   Compiling try-lock v0.2.5
+   Compiling fnv v1.0.7
+   Compiling fallible-iterator v0.3.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling atomic-waker v1.1.2
+   Compiling anstyle-query v1.1.5
+   Compiling crc32fast v1.5.3
+   Compiling colorchoice v1.0.5
+   Compiling subtle v2.6.1
+   Compiling want v0.3.2
+   Compiling anstream v1.0.0
+   Compiling time v0.3.55
+   Compiling ref-cast v1.0.27
+   Compiling skippy-model-artifact v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling futures-executor v0.3.34
+   Compiling skippy-tokenizer v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling fs2 v0.4.3
+   Compiling prost-build v0.14.4
+   Compiling core-foundation v0.9.4
+   Compiling clap_lex v1.1.1
+   Compiling cfg_aliases v0.2.2
+   Compiling simd-adler32 v0.3.10
+   Compiling dyn-clone v1.0.20
+   Compiling nix v0.31.3
+   Compiling clap_builder v4.6.7
+   Compiling mesh-llm-types v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling schemars v1.2.3
+   Compiling futures v0.3.34
+   Compiling toml_edit v0.25.17+spec-1.1.0
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling skippy-native-runtime v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling security-framework-sys v2.17.0
+   Compiling core-foundation v0.10.1
+   Compiling encoding_rs v0.8.42
+   Compiling sync_wrapper v1.0.2
+   Compiling system-configuration v0.7.0
+   Compiling semver v1.0.28
+   Compiling adler2 v2.0.1
+   Compiling tower-layer v0.3.3
+   Compiling ipnet v2.12.2
+   Compiling skippy-protocol v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling mesh-llm-plugin v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling miniz_oxide v0.9.1
+   Compiling security-framework v3.7.0
+   Compiling instability v0.3.14
+   Compiling rmcp-macros v3.8.0
+   Compiling secp256k1 v0.29.1
+   Compiling tokio-util v0.7.20
+   Compiling tower v0.5.3
+   Compiling ratatui-widgets v0.3.2
+   Compiling clap v4.6.7
+   Compiling crossterm v0.29.0
+   Compiling skippy-events v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling bumpalo v3.20.3
+   Compiling multiversion_no_op v1.0.0
+   Compiling h2 v0.4.20
+   Compiling rmcp v3.8.0
+   Compiling zlib-rs v0.6.8
+   Compiling simdutf8 v0.1.5
+   Compiling tower-http v0.6.11
+   Compiling ratatui-crossterm v0.1.2
+   Compiling xattr v1.7.0
+   Compiling http-body-util v0.1.5
+   Compiling filetime v0.2.29
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling typed-path v0.13.0
+   Compiling winnow v0.7.15
+   Compiling zopfli v0.8.4
+   Compiling mime v0.3.17
+   Compiling tar v0.4.46
+   Compiling rusqlite v0.40.2
+   Compiling mesh-llm-skills v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling hyper v1.12.0
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling lightning-types v0.4.0-rc3
+   Compiling lightning-invoice v0.35.0-rc3
+   Compiling hyper-util v0.1.21
+   Compiling flate2 v1.1.10
+   Compiling mesh-llm-wallet v0.78.0 (/Users/michaelneale/.buzz/REPOS/ln-payments-plugin/crates/mesh-llm-wallet)
+   Compiling mesh-llm-payments-types v0.78.0 (/Users/michaelneale/.buzz/REPOS/ln-payments-plugin/crates/mesh-llm-payments-types)
+   Compiling mesh-llm-config v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling ratatui-macros v0.7.2
+   Compiling ratatui v0.30.2
+   Compiling mesh-llm-payments v0.78.0 (/Users/michaelneale/.buzz/REPOS/ln-payments-plugin/crates/mesh-llm-payments)
+   Compiling zip v9.1.3
+   Compiling mesh-llm-events v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling rustls-webpki v0.103.16
+   Compiling tokio-rustls v0.26.6
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling mesh-llm-plugin-manager v0.78.0 (https://github.com/Mesh-LLM/mesh-llm.git?rev=a4cb198d0bc9815c82c3078da5b7840d44834168#a4cb198d)
+   Compiling mesh-llm-pay-lightning v0.78.0 (/Users/michaelneale/.buzz/REPOS/ln-payments-plugin/crates/mesh-llm-pay-lightning)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.80s
+     Running unittests src/lib.rs (target/debug/deps/mesh_llm_pay_lightning-87a6e38d1530c4f4)
+
+running 37 tests
+test runtime::tests::manifest_requests_only_required_gate_metadata_and_channel ... ok
+test connections::tests::disconnect_invalidates_pending_recovery_without_waiting_for_wallet ... ok
+test receipt_schedule::tests::backoff_caps_without_forgetting_debt_and_paid_entries_are_removed ... ok
+test receipt_schedule::tests::bounds_batches_and_gives_old_invoices_a_turn ... ok
+test config::tests::refuses_unknown_fields_and_relative_state ... ok
+test tests::normalized_cached_usage_and_partial_usage_are_not_confused ... ok
+test runtime::tests::settlement_does_not_hold_ordered_handler ... ok
+test config::tests::load_is_side_effect_free_and_defaults_to_no_spending ... ok
+test diagnostics::tests::records_boundaries_without_environment_mutation ... ok
+test tests::local_gateway_and_unpriced_models_are_not_gated ... ok
+test tests::repeated_quote_returns_same_unconsumed_invoice ... ok
+test tests::rates_above_local_ceiling_do_not_pay ... ok
+test tests::concurrent_quotes_share_one_unconsumed_admission ... ok
+test tests::peer_reconnect_recovers_debt_before_new_quote ... ok
+test tests::startup_propagates_wallet_failure ... ok
+test wallet_binding::tests::a_pay_refused_before_dispatch_is_submitted_once_after_setup ... ok
+test tickets::tests::single_use_owner_bound_and_durable ... ok
+test wallet_binding::tests::a_provider_that_comes_back_as_another_wallet_is_refused ... ok
+test tests::buyer_vouches_only_once_for_ready_ticket ... ok
+test wallet_binding::tests::a_restarted_provider_is_set_up_again_and_the_call_retried ... ok
+test wallet_binding::tests::a_second_refusal_is_reported_as_not_submitted ... ok
+test wallet_binding::tests::concurrent_refusals_share_one_setup ... ok
+test tests::gateway_terminal_cannot_settle_sellers_ticket ... ok
+test tests::absent_usage_abandons_without_bill_or_strike ... ok
+test tests::known_buyer_waits_for_inflight_deposit_unknown_buyer_does_not ... ok
+test tests::duplicate_admission_and_paid_replay_do_not_buy_or_dispatch_twice ... ok
+test tests::selected_buyer_waits_for_authenticated_ready_and_consumes_it_once ... ok
+test tests::forged_final_bill_and_wrong_sender_are_rejected ... ok
+test tests::startup_opens_wallet_once_for_both_roles_without_payment ... ok
+test tests::warm_requests_skip_reconciliation_until_disconnect ... ok
+test tests::cold_deposit_gate_final_recovery_and_warm_admission ... ok
+test tests::unsolicited_seller_or_excess_rates_never_pay ... ok
+test diagnostics::tests::concurrent_records_remain_complete_json_lines ... ok
+test tests::seller_receipt_resumes_ingress_without_buyer_paid_notification ... ok
+test tests::seller_restart_observes_receipts_without_a_peer_message ... ok
+test tests::warm_refill_precedes_final_settlement_and_still_obeys_strikes ... ok
+test tests::slow_receipt_lookup_does_not_delay_another_paid_receipt ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running unittests src/bin/pay-lightning.rs (target/debug/deps/pay_lightning-abf66eb7c404eab1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/installed_process.rs (target/debug/deps/installed_process-4c1fb749fc7bd579)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/utility_lifecycle.rs (target/debug/deps/utility_lifecycle-fe2e8208956354b2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wallet_children.rs (target/debug/deps/wallet_children-5f1cf366a4e90b21)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/mesh_llm_payments-d95baa5282ffd1e6)
+
+running 115 tests
+test intent::tests::requests_cannot_expand_profile_authority ... ok
+test ledger::migrations::upgrade_tests::corrupt_file_is_not_replaced ... ok
+test ledger::migrations::upgrade_tests::empty_versioned_drafts_are_not_adopted ... ok
+test ledger::migrations::upgrade_tests::current_metered_records_survive_reopen ... ok
+test ledger::tests::approvals_cannot_change_terms_or_revive_rejected_requests ... ok
+test ledger::migrations::upgrade_tests::schema_5_metered_records_gain_an_empty_model ... ok
+test ledger::migrations::tests::adopts_legacy_data_and_rejects_future_schema_without_downgrade ... ok
+test ledger::tests::single_policy_controls_eligibility ... ok
+test ledger::tests::approvals_do_not_reserve_the_daily_budget ... ok
+test tests::admission_deposit_control_follows_the_minimum_until_set_and_never_drops_below_it ... ok
+test tests::a_fresh_charge_pays_without_a_lookup ... ok
+test ledger::tests::evidence_correlation_survives_reopen_without_schema_change ... ok
+test intent::tests::intent_defaults_free_and_survives_restart ... ok
+test tests::a_model_deposit_overrides_the_node_wide_one_until_cleared ... ok
+test tests::a_fee_above_the_headroom_still_counts_against_the_daily_budget ... ok
+test ledger::migrations::tests::older_ledgers_gain_metered_tables_and_drop_fixed_allowance_accounting ... ok
+test tests::buying::a_buyer_pays_a_seller_deposit_up_to_its_own_and_refuses_a_higher_one ... ok
+test ledger::migrations::upgrade_tests::actual_main_schema_preserves_buyer_records_and_policy ... ok
+test tests::buying::a_buyer_pays_a_seller_minimum_up_to_its_own_and_refuses_a_higher_one ... ok
+test tests::buying::a_restart_keeps_an_accepted_admission_open_for_recovery ... ok
+test tests::blocking::unpaid_deposits_and_abandoned_requests_do_not_block ... ok
+test tests::buying::a_deposit_retired_while_the_wallet_opens_is_never_submitted ... ok
+test tests::buying::an_abandoned_settlement_creates_no_charge_and_a_covered_bill_needs_no_invoice ... ok
+test tests::buying::an_admission_must_restate_the_terms_within_this_nodes_deposit ... ok
+test tests::buying::admitted_final_settles_above_legacy_cap_after_daily_allowance_is_exhausted ... ok
+test tests::failure_boundaries::expired_automatic_authorization_never_calls_the_wallet ... ok
+test tests::invoices_reject_peer_metadata_substitution_and_amount_changes ... ok
+test tests::buying::cached_discount_uses_frozen_price_and_same_seller_buyer_bill ... ok
+test tests::duplicate_segments_and_hashes_cannot_change_the_debit ... ok
+test tests::buying::full_credit_does_not_require_the_buyers_deposit_observation_to_finish ... ok
+test tests::buying::expired_metered_charge_needs_authoritative_absence_before_retirement ... ok
+test tests::buying::deposit_and_final_are_paid_only_at_the_admitted_amounts_to_one_payee ... ok
+test tests::buying::final_invoice_still_requires_authentic_metadata_and_unexpired_new_intent ... ok
+test tests::blocking::blocked_peers_are_listed_with_their_identifier_and_unblocked_by_prefix ... ok
+test tests::metered_service::a_replayed_admission_keeps_the_deposit_it_was_admitted_with ... ok
+test tests::lost_payment_response_recovers_after_restart_without_double_spend ... ok
+test tests::metered_service::a_model_deposit_is_asked_instead_of_the_node_wide_one ... ok
+test tests::buying::expired_paid_final_recovers_after_restart_without_another_submission ... ok
+test tests::metered_service::a_configured_deposit_is_separate_from_the_minimum_payment ... ok
+test tests::metered_service::a_reused_request_id_cannot_switch_to_a_model_with_a_larger_deposit ... ok
+test tests::metered_service::buyer_that_dropped_discount_is_refused_before_deposit ... ok
+test tests::buying::discounted_subsat_final_survives_both_restarts_and_pays_once ... ok
+test tests::metered_service::an_overridden_minimum_payment_is_the_deposit_and_the_final_round_up ... ok
+test tests::metered_service::an_admitted_request_keeps_its_minimum_payment_through_settlement ... ok
+test tests::metered_service::covering_deposit_means_no_final_invoice_and_abandonment_keeps_the_deposit ... ok
+test tests::historical_recovery::main_v2_empty_and_unsubmitted_input_approvals_close_without_payment ... ok
+test tests::metered_settlement::admission_identity_is_the_exact_terms ... ok
+test tests::metered_service::expired_nonpayment_survives_restart_without_revoking_reearned_trust ... ok
+test tests::metered_service::restart_recovery_accepts_a_receipt_net_of_the_receivers_fee ... ok
+test tests::metered_settlement::deposit_is_flat_and_admission_is_idempotent ... ok
+test tests::metered_settlement::abandoned_requests_have_no_bill_no_debt_and_keep_a_received_deposit ... ok
+test tests::metered_service::unpaid_deposit_never_reduces_the_bill ... ok
+test tests::metered_settlement::covering_deposit_means_no_final_invoice_and_no_refund ... ok
+test tests::metered_service::restart_abandons_in_flight_requests_and_never_redispatches ... ok
+test tests::metered_settlement::dispatch_claim_is_once_only_and_survives_restart ... ok
+test tests::metered_service::deposit_then_final_invoice_for_the_remainder_settles_trust ... ok
+test tests::metered_settlement::every_positive_sub_sat_remainder_gets_a_final_invoice ... ok
+test tests::min_payment_control_reads_defaults_sets_and_validates_offline ... ok
+test tests::oversized_wire_frame_is_rejected_before_allocation ... ok
+test tests::failure_boundaries::admitted_payments_settle_then_recorded_spending_blocks_new_admissions ... ok
+test tests::metered_settlement::unpaid_deposit_never_reduces_the_bill ... ok
+test tests::metered_settlement::startup_abandons_interrupted_rows ... ok
+test tests::historical_recovery::main_v2_submitted_success_failure_and_outage_preserve_exact_budget ... ok
+test tests::one_policy_command_enables_paid_use_and_free_only_stops_new_work ... ok
+test tests::payment_notifications::a_failed_incoming_payment_never_opens_the_gate ... ok
+test tests::metered_settlement::forgiving_a_peer_clears_its_strikes_but_a_late_payment_is_still_recorded ... ok
+test tests::payment_notifications::arrival_returns_on_claiming_while_receipt_still_requires_completion ... ok
+test tests::metered_settlement::usage_bills_input_plus_output_minus_paid_deposit_until_final_paid ... ok
+test tests::metered_settlement::three_issued_unpaid_final_invoices_block_admission ... ok
+test tests::output_payment_uses_the_original_authorization_and_actual_fees ... ok
+test tests::payment_notifications::arrival_without_a_claiming_state_falls_back_to_completion ... ok
+test tests::payment_notifications::arrival_wait_gives_up_at_its_own_deadline_before_the_invoice_expires ... ok
+test tests::payment_notifications::expired_incoming_invoice_still_recognizes_an_existing_receipt ... ok
+test tests::metered_settlement::metered_receivables_must_match_current_state ... ok
+test tests::payment_notifications::incoming_notification_wait_expires_without_polling ... ok
+test tests::payment_notifications::incoming_notifications_wake_multiple_waiters_without_polling ... ok
+test tests::payment_notifications::incoming_settlement_before_subscription_is_not_missed ... ok
+test tests::payment_notifications::cancelled_observation_preserves_pending_payment_for_restart ... ok
+test tests::payment_notifications::settlement_during_initial_lookup_is_not_missed ... ok
+test tests::payment_notifications::received_payment_reports_what_the_wallet_credited_and_deducted ... ok
+test tests::payment_notifications::metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet ... ok
+test tests::payment_notifications::notification_error_keeps_payment_pending_until_authoritative_recovery ... ok
+test tests::recovery_boundaries::periodic_reconciliation_preserves_live_zero_charge_approval ... ok
+test tests::provisioning::factory_is_lazy_single_flight_and_survives_service_restart ... ok
+test tests::resubmission::lost_submission_is_resubmitted_and_settles_once ... ok
+test tests::payment_notifications::outgoing_success_and_failure_are_driven_by_notifications ... ok
+test tests::resubmission::recorded_payment_reconciles_without_a_second_pay ... ok
+test tests::resubmission::resubmission_racing_the_first_landing_returns_the_existing_payment ... ok
+test tests::resubmission::rejected_resubmission_stays_pending_until_expiry ... ok
+test tests::recovery_boundaries::cancellation_and_preparation_have_only_one_winner ... ok
+test tests::review_regressions::already_paid_invoice_creates_no_phantom_approval ... ok
+test tests::review_regressions::fund_honors_fixed_amount_and_rejects_zero ... ok
+test tests::review_regressions::failed_charge_does_not_release_an_uncertain_sibling ... ok
+test tests::review_regressions::failed_inference_invoice_and_invalid_amount_create_no_send_reservations ... ok
+test tests::review_regressions::already_paid_send_repairs_legacy_phantom_authorizations ... ok
+test tests::review_regressions::pending_input_payment_survives_reopen_and_is_reconciled_not_failed ... ok
+test tests::review_regressions::prepared_output_payment_can_resume_without_resubmitting_started_payment ... ok
+test tests::review_regressions::prepared_wallet_send_survives_reopen ... ok
+test tests::review_regressions::declined_and_failed_sends_release_budget_without_manual_finish ... ok
+test tests::review_regressions::unindexed_uncertain_payment_is_retried_but_never_released_before_expiry ... ok
+test tests::unpin::unpin_removes_the_pin_when_nothing_is_outstanding ... ok
+test tests::unpin::unpin_is_refused_while_an_issued_invoice_is_unpaid ... ok
+test tests::unpin::an_unpaid_invoice_blocks_until_it_is_forgiven ... ok
+test tests::unpin::unpin_is_refused_by_a_service_that_can_reach_a_wallet ... ok
+test tests::unpin::unpin_is_refused_while_an_outgoing_payment_is_unresolved ... ok
+test tests::review_regressions::send_recovery_closes_success_and_failure_after_restart ... ok
+test tests::metered_service::a_final_paid_while_admission_waits_is_not_a_strike ... ok
+test tests::recovery_boundaries::startup_releases_approvals_that_never_reached_the_wallet ... ok
+test ledger::migrations::upgrade_tests::unsupported_drafts_are_rejected_without_changing_the_file ... ok
+test tests::metered_service::three_unpaid_final_invoices_block_admission_until_one_is_paid ... ok
+test tests::metered_service::warm_peer_skips_deposits_with_finals_in_flight_until_strike_limit ... ok
+test tests::metered_service::a_never_paid_final_gives_up_promptly_and_still_blocks_the_buyer ... ok
+test tests::failure_boundaries::pending_htlc_survives_restart_outage_and_expiry_until_failure ... ok
+test tests::failure_boundaries::pending_htlc_survives_restart_outage_and_expiry_until_success ... ok
+test tests::resubmission::expired_invoice_with_no_payment_fails_and_releases ... ok
+
+test result: ok. 115 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.40s
+
+     Running unittests src/lib.rs (target/debug/deps/mesh_llm_payments_types-06bc5ec238dcbd57)
+
+running 21 tests
+test contract::tests::an_unclassified_operation_is_unbounded ... ok
+test metering::tests::final_invoice_is_exact_and_only_rounds_a_sub_sat_remainder ... ok
+test pricing::tests::fee_allowance_is_monotone_so_charge_caps_fit_the_request_cap ... ok
+test pricing::tests::fractional_rates_round_once_at_the_invoice_boundary ... ok
+test contract::tests::only_ledger_bookkeeping_operations_are_bounded ... ok
+test offers::tests::only_current_protocol_paid_offers_are_payable ... ok
+test metering::tests::an_overridden_floor_rounds_the_same_way_and_is_bounded ... ok
+test pricing::tests::charges_round_up_to_the_msat_and_overflow_is_enforced ... ok
+test contract::tests::settled_received_accepts_a_provider_that_answers_empty ... ok
+test pricing::tests::cached_input_discount_is_bounded_and_rounded_once ... ok
+test pricing::tests::fee_allowance_has_a_floor_and_grows_with_the_amount ... ok
+test metered_wire::tests::admission_minimum_payment_is_omitted_at_the_default_and_carried_otherwise ... ok
+test metered_wire::tests::metered_frames_reject_retired_frames_and_unknown_fields ... ok
+test metered_wire::tests::missing_usage_is_explicit_not_a_zero_bill ... ok
+test metering::tests::usage_is_backend_reported_inclusive_and_may_be_zero ... ok
+test response_usage::tests::cached_usage_survives_json_and_sse_and_inconsistent_reports_fail ... ok
+test response_usage::tests::abort_requires_complete_terminal_sse_not_provisional_or_truncated_events ... ok
+test response_usage::tests::missing_partial_and_reasoning_chunks_are_not_token_counts ... ok
+test response_usage::tests::malformed_final_usage_discards_previous_evidence_permanently ... ok
+test response_usage::tests::json_and_chunked_sse_handle_every_byte_boundary ... ok
+test response_usage::tests::collector_failures_are_sticky_and_backend_errors_are_distinct ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/mesh_llm_wallet-a5568730aead0ee6)
+
+running 11 tests
+test contract::tests::plain_text_error_falls_back_to_failed ... ok
+test contract::tests::only_explicit_rejections_map_to_not_submitted ... ok
+test contract::tests::open_response_without_features_gets_original_contract_guarantees ... ok
+test contract::tests::error_round_trips_as_json ... ok
+test contract::tests::mcp_text_block_error_is_unwrapped ... ok
+test provisioning::tests::corrupt_pin_is_an_error_not_absent ... ok
+test invoice::tests::tampered_metadata_is_rejected ... ok
+test invoice::tests::parse_round_trips_metadata ... ok
+test invoice::tests::invoices_parse_on_any_network ... ok
+test provisioning::tests::remove_returns_the_pin_and_tolerates_absent_and_corrupt_pins ... ok
+test provisioning::tests::pin_round_trips_and_is_absent_by_default ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests mesh_llm_pay_lightning
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mesh_llm_payments
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mesh_llm_payments_types
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mesh_llm_wallet
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+exit=0
