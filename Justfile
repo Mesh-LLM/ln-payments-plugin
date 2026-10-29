@@ -1,4 +1,4 @@
-# ln-payments-plugin — WIP, do not use.
+# ln-payments-plugin — WIP, do not use. `just test` is serial: the suite is flaky in parallel.
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 target := `rustc -vV | sed -n 's/^host: //p'`
@@ -6,10 +6,10 @@ version := `sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1`
 
 check:
     cargo fmt --all --check
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 test:
-    cargo test --workspace -- --test-threads=1
+    cargo test --workspace --all-features -- --test-threads=1
 
 build:
     cargo build --release -p mesh-llm-pay-lightning --bin pay-lightning

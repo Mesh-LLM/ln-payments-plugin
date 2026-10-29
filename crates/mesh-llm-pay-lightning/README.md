@@ -82,16 +82,26 @@ operation, including `wallet_pay`, because the host refused it before anything
 reached the provider. A second refusal fails closed.
 
 `prices` maps model IDs to `input_msat_per_million`, `output_msat_per_million` and
-`cache_discount_percent`. `buy_prices` uses the same shape for authorized ceilings;
-`buy_peers` contains exact authenticated peer IDs. Buying requires positive
-`cap_msat` and explicit automatic policy with `daily_budget_msat`. The budget is
-daily, not a per-request cap. Defaults never authorize spending. Optional absolute
-`timing_log` and `error_log` paths belong inside isolated process-owned state.
+`cache_discount_percent`. Buying is decided by the ledger policy alone, as it was
+for built-in payments: `policy.mode = "automatic"` with daily budget left
+(`mesh-llm wallet policy --mode automatic --daily-budget-sats N`); the budget is
+daily, not a per-request cap, and the admission's `max_total_msat` is that
+budget. The static fields only narrow it: `buy_peers` (exact authenticated peer
+IDs) restricts which sellers are paid, `buy_prices` (same shape as `prices`)
+caps a seller's per-model rates, `cap_msat` when non-zero lowers the admission
+cap. The handshake starts when a request selects a seller; a seller listed in
+`buy_peers` is handshaken eagerly on peer-up. Unsolicited admissions are refused.
+Defaults (`free_only`) never authorize spending. Optional absolute `timing_log`
+and `error_log` paths belong inside isolated process-owned state.
 
 The host must grant required metadata/admission access to `request_received`,
 `backend_selected`, `exchange_finished`, header
 `x-plugin-7061792d6c696768746e696e67-pay-terms`, a 30000 ms deadline and peer block
-permission. See [exchange contract](../../docs/plugins/openai-exchange-lifecycle.md).
+permission. See the host's exchange contract,
+[`mesh/docs/plugins/openai-exchange-lifecycle.md`](https://github.com/Mesh-LLM/mesh-llm/blob/eba2a8ecf/mesh/docs/plugins/openai-exchange-lifecycle.md),
+and the operator-bound operations section of
+[`mesh/docs/plugins/README.md`](https://github.com/Mesh-LLM/mesh-llm/blob/eba2a8ecf/mesh/docs/plugins/README.md)
+at the pinned mesh-llm revision.
 
 ## Admission, settlement and lifecycle
 
@@ -115,8 +125,9 @@ unconsumed tickets rather than replaying inference.
 
 ## Offline development and evidence boundaries
 
-Run `just check`, `just test`, `just build`, `just package` here. `package` stages
-the separate utility; `package-mock` stages the combined offline fixture. Raise
+Run `just check`, `just test`, `just build`, `just package` from the repository
+root. `package` stages the installable utility under `dist/`; the tests run with
+`--all-features` so the `offline-mock` fixtures are included, serially. Raise
 the macOS file limit with `ulimit -n 8192` before the full suite. The opt-in
 `offline-mock` binary uses signed synthetic invoices and an explicit shared file
 network. It never contacts wallet services or moves funds. Its
@@ -129,4 +140,5 @@ plus the installed utility's host RPC setup, startup delay, SIGKILL and identity
 pin reuse. Synthetic children are one backend under different names, not two
 independently implemented real providers. These tests do not establish live
 QUIC/inference performance, automatic install/binding, wallet setup UX, migration,
-removal UX or cross-platform installed behavior. Run `just clean` after validation.
+removal UX or cross-platform installed behavior. Remove `target/` and `dist/`
+after validation.

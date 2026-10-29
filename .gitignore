@@ -3,3 +3,5 @@ target/
 .DS_Store
 .scratch/
 dist/
+*.log
+.archive-path
