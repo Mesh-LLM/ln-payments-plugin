@@ -106,13 +106,13 @@ Known gaps, none of them signed off:
 - The test suite is flaky in parallel; `just test` runs it serially.
 - Not in the plugin catalog; `pay-lightning` is both the installed plugin name
   and the protocol slot — naming is under review.
-- Install UX: a wallet install does not yet bring `pay-lightning` with it.
-  mesh-llm #2654 lets a plugin's `plugin.toml` declare `requires = [...]` and
-  has `plugins install` fetch a missing requirement from the catalog; making
-  `mesh-llm plugins install Mesh-LLM/lexe-wallet` sufficient still needs a
-  lexe-wallet release declaring `requires = ["pay-lightning"]` and
-  `pay-lightning` published in the catalog so the installer can resolve it by
-  name. Until then, install both by hand.
+- Install UX: install `pay-lightning` and a wallet plugin by hand for now.
+  Neither plugin names the other: `pay-lightning` asks for an opaque wallet
+  capability, the operator binds it to a provider, and a wallet only provides
+  that capability. A later catalog *bundle* may install the pair together as an
+  install-time preset; it is not a runtime dependency. With no wallet bound,
+  `pay-lightning` reports not-ready in `mesh-llm plugins list` and the node
+  does not install or start anything on its behalf.
 - mesh-llm #2654 still carries copies of these four crates in its workspace;
   removing them and updating `mesh/docs/specs/lightning-payments.md` (still the
   built-in protocol text) are pending on that PR.
