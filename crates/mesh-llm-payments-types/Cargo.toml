@@ -16,7 +16,7 @@ default = []
 engine = ["dep:mesh-llm-plugin"]
 
 [dependencies]
-mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "18562397862ba1e30d0f3a40545f5d894a42a69c", optional = true }
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "e87a133a1", optional = true }
 anyhow.workspace = true
 httparse = "1"
 mesh-llm-wallet = { path = "../mesh-llm-wallet" }

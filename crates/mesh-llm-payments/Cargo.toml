@@ -18,7 +18,7 @@ plugin-server = ["dep:mesh-llm-plugin", "dep:rmcp", "mesh-llm-payments-types/eng
 
 [dependencies]
 anyhow.workspace = true
-mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "18562397862ba1e30d0f3a40545f5d894a42a69c", optional = true }
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "e87a133a1", optional = true }
 rmcp = { version = "3", features = ["server"], optional = true }
 async-trait = "0.1"
 fs2 = "0.4"
