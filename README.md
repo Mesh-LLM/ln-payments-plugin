@@ -72,6 +72,12 @@ mesh-llm plugins install --archive dist/pay-lightning-v0.78.0-<target>.tar.gz \
     --name pay-lightning --version 0.78.0
 ```
 
+Install **both** plugins, in either order, before starting the node. The host
+resolves `pay-lightning`'s `wallet.v1` binding to a running wallet plugin; it
+does not install one, and installing a wallet does not install `pay-lightning`.
+Without a wallet plugin `pay-lightning` starts but every wallet call is refused
+(`no running plugin serves wallet.v1`).
+
 Then on the seller `mesh-llm --model <model> --console <port>` and
 `mesh-llm wallet --port <console port> pricing <model> …`; on the buyer
 `mesh-llm client --join <token> --console <port>` and
@@ -100,6 +106,12 @@ Known gaps, none of them signed off:
 - The test suite is flaky in parallel; `just test` runs it serially.
 - Not in the plugin catalog; `pay-lightning` is both the installed plugin name
   and the protocol slot — naming is under review.
+- Install UX: a wallet install does not yet bring `pay-lightning` with it.
+  Making `mesh-llm plugins install Mesh-LLM/lexe-wallet` sufficient needs
+  mesh-llm #2687 (`plugin.toml` `requires = [...]`, install fetches a missing
+  requirement from the catalog) merged, a lexe-wallet release declaring
+  `requires = ["pay-lightning"]`, and `pay-lightning` published in the catalog
+  so the installer can resolve it by name. Until then, install both by hand.
 - mesh-llm #2654 still carries copies of these four crates in its workspace;
   removing them and updating `mesh/docs/specs/lightning-payments.md` (still the
   built-in protocol text) are pending on that PR.
