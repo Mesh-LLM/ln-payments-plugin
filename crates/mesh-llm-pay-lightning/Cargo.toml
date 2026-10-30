@@ -13,8 +13,8 @@ anyhow = "1"
 prost = "0.14"
 rusqlite = { version = "0.40", features = ["bundled"] }
 async-trait = "0.1"
-mesh-llm-events = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "eba2a8ecf" }
-mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "eba2a8ecf" }
+mesh-llm-events = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "cd9edd70c" }
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "cd9edd70c" }
 mesh-llm-payments = { path = "../mesh-llm-payments" }
 mesh-llm-payments-types = { path = "../mesh-llm-payments-types" }
 mesh-llm-wallet = { path = "../mesh-llm-wallet" }
@@ -47,6 +47,6 @@ optional = true
 [dev-dependencies]
 bitcoin = { version = "0.32", features = ["secp-recovery"] }
 lightning-invoice = { version = "0.35.0-rc1", features = ["std"] }
-mesh-llm-plugin-manager = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "eba2a8ecf" }
+mesh-llm-plugin-manager = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "cd9edd70c" }
 flate2 = "1"
 tar = "0.4"

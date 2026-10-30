@@ -27,7 +27,6 @@ async fn launch(root: &Path, config: &Path) -> (Child, LocalStream) {
     let _ = std::fs::remove_file(&socket);
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_pay-lightning"))
-        .env("MESH_LLM_PLUGIN_SETTINGS_JSON", serde_json::json!({"config_path":config,"wallet_binding":"test-wallet","allow_wallet_provisioning":true}).to_string())
         .env("MESH_LLM_PLUGIN_NAME", "pay-lightning")
         .env("MESH_LLM_PLUGIN_ENDPOINT", socket)
         .env("MESH_LLM_PLUGIN_TRANSPORT", "unix")
@@ -53,6 +52,7 @@ async fn launch(root: &Path, config: &Path) -> (Child, LocalStream) {
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.into(),
                         mesh_llm_plugin::operation_binding::CAPABILITY.into(),
                     ],
+                    settings_json: serde_json::json!({"config_path":config,"wallet_binding":"test-wallet","allow_wallet_provisioning":true}).to_string(),
                     ..Default::default()
                 },
             )),

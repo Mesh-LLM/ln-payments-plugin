@@ -137,6 +137,7 @@ impl ChildWallet {
                     kind: proto::ServiceKind::Operation as i32,
                     service_name: operation.into(),
                     input_json: serde_json::to_string(input)?,
+                    invocation_id: None,
                 },
             ))
             .await?;

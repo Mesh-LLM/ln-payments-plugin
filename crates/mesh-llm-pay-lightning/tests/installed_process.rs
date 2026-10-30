@@ -95,6 +95,7 @@ async fn verify_unopened(stream: &mut LocalStream) {
             host_info_json: "{}".into(),
             host_capabilities: vec![mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.into()],
             mesh_visibility: proto::MeshVisibility::Private.into(),
+            settings_json: "{}".into(),
         }),
     )
     .await;

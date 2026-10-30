@@ -66,91 +66,198 @@ const CONTROL_OPERATION: &str = "control";
 const CONTROL_DESCRIPTION: &str =
     "Run one local operator command (balance, fund, send, policy, pricing, …).";
 
-/// Run the payment protocol with an in-process wallet adapter. Manifest inspection
-/// is handled before reading configuration or opening any state.
+/// Turns the host's handshake settings into the wallet adapter and config.
+type Setup = Box<
+    dyn FnOnce(
+            &str,
+        ) -> Result<(
+            Arc<dyn mesh_llm_wallet::provisioning::WalletFactory>,
+            Config,
+        )> + Send,
+>;
+type EngineSlot = Arc<std::sync::OnceLock<Arc<Engine>>>;
+
+/// What `run_bound` needs from the operator's settings.
+pub struct BoundSettings {
+    pub wallet_binding: String,
+    pub allow_wallet_provisioning: bool,
+    pub config: Config,
+}
+
+/// Run the payment protocol with an in-process wallet adapter and a fixed
+/// config; the host's settings are ignored.
 pub async fn run(
     name: String,
     version: &str,
     factory: impl mesh_llm_wallet::provisioning::WalletFactory + 'static,
     config: Config,
 ) -> Result<()> {
-    run_with_context(name, version, Arc::new(factory), config, None).await
+    let factory: Arc<dyn mesh_llm_wallet::provisioning::WalletFactory> = Arc::new(factory);
+    run_with_setup(
+        name,
+        version,
+        Box::new(move |_| Ok((factory, config))),
+        None,
+    )
+    .await
 }
 
+/// Run against the host-owned wallet binding. `settings` receives the
+/// operator's `[plugin.settings]` JSON from the initialize handshake.
 pub async fn run_bound(
     name: String,
     version: &str,
-    binding: String,
-    allow_provisioning: bool,
-    config: Config,
+    settings: impl FnOnce(&str) -> Result<BoundSettings> + Send + 'static,
 ) -> Result<()> {
     let context = Arc::new(std::sync::OnceLock::new());
-    let factory = crate::wallet_binding::InitializedWalletFactory {
-        context: context.clone(),
-        binding,
-        allow_provisioning,
-    };
-    run_with_context(name, version, Arc::new(factory), config, Some(context)).await
+    let wallet_context = context.clone();
+    let setup: Setup = Box::new(move |json| {
+        let settings = settings(json)?;
+        let factory: Arc<dyn mesh_llm_wallet::provisioning::WalletFactory> =
+            Arc::new(crate::wallet_binding::InitializedWalletFactory {
+                context: wallet_context,
+                binding: settings.wallet_binding,
+                allow_provisioning: settings.allow_wallet_provisioning,
+            });
+        Ok((factory, settings.config))
+    });
+    run_with_setup(name, version, setup, Some(context)).await
 }
 
-async fn run_with_context(
-    name: String,
-    version: &str,
+fn build_engine(
+    namespace: &str,
     factory: Arc<dyn mesh_llm_wallet::provisioning::WalletFactory>,
     config: Config,
-    wallet_context: Option<Arc<std::sync::OnceLock<PluginContext<'static>>>>,
-) -> Result<()> {
-    config.validate()?;
+) -> Result<Arc<Engine>> {
     crate::diagnostics::configure(config.timing_log.clone(), config.error_log.clone())?;
-    let namespace: String = name.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-    let header = format!("x-plugin-{namespace}-pay-terms");
-    let manifest = manifest(&header);
     let directory = &config.data_dir;
     let service = Arc::new(PaymentService::with_factory(directory, factory)?);
     service.ledger.set_policy(&config.policy)?;
     for (model, price) in &config.prices {
         service.ledger.set_pricing(model, Some(price))?;
     }
-    let mut engine = Engine::new(service, &namespace, config.cap_msat, directory)?;
+    let mut engine = Engine::new(service, namespace, config.cap_msat, directory)?;
     engine.buying = config.buy_prices;
     engine.buy_peers = config.buy_peers;
-    let engine = Arc::new(engine);
+    Ok(Arc::new(engine))
+}
+
+type Prepared = (
+    Arc<dyn mesh_llm_wallet::provisioning::WalletFactory>,
+    Config,
+);
+
+fn prepare(
+    setup: &std::sync::Mutex<Option<Setup>>,
+    settings_json: &str,
+) -> mesh_llm_plugin::PluginResult<Prepared> {
+    let result: Result<Prepared> = (|| {
+        let setup = setup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .context("pay-lightning initialized twice")?;
+        let (factory, config) = setup(settings_json)?;
+        config.validate()?;
+        Ok((factory, config))
+    })();
+    result.map_err(|error| {
+        mesh_llm_plugin::PluginError::invalid_request(format!("pay-lightning settings: {error:#}"))
+    })
+}
+
+async fn start(
+    slot: &EngineSlot,
+    namespace: &str,
+    (factory, config): Prepared,
+    context: &mut PluginContext<'static>,
+    wallet_context: Option<Arc<std::sync::OnceLock<PluginContext<'static>>>>,
+) -> Result<()> {
+    let engine = build_engine(namespace, factory, config)?;
+    ensure!(
+        slot.set(engine.clone()).is_ok(),
+        "pay-lightning initialized twice"
+    );
+    for model in engine.service.ledger.pricing()?.keys() {
+        context
+            .require_channels_for_model(model, &[(CHANNEL, &[])])
+            .await?;
+    }
+    if let Some(wallet_context) = wallet_context {
+        ensure!(
+            context.host_supports(mesh_llm_plugin::operation_binding::CAPABILITY),
+            "host does not support operation bindings"
+        );
+        let _ = wallet_context.set(context.owned());
+    }
+    engine.start().await?;
+    observe_receipts(Arc::downgrade(&engine));
+    Ok(())
+}
+
+fn engine_of(slot: &EngineSlot) -> Result<Arc<Engine>> {
+    slot.get()
+        .cloned()
+        .context("pay-lightning is not initialized")
+}
+
+async fn run_with_setup(
+    name: String,
+    version: &str,
+    setup: Setup,
+    wallet_context: Option<Arc<std::sync::OnceLock<PluginContext<'static>>>>,
+) -> Result<()> {
+    let namespace: String = name.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let header = format!("x-plugin-{namespace}-pay-terms");
+    let manifest = manifest(&header);
+    let slot: EngineSlot = Arc::new(std::sync::OnceLock::new());
+    let setup = Arc::new(std::sync::Mutex::new(Some(setup)));
+    // Settings are parsed and validated in the handshake, so a bad config is
+    // refused there; state opens afterwards, off the initialize deadline.
+    let prepared = Arc::new(std::sync::Mutex::new(None));
 
     let metadata = payment_metadata(&name, version, manifest);
-    let operations = control_operations(engine.clone());
-    let messages = engine.clone();
-    let events = engine.clone();
-    let startup = engine.clone();
+    let operations = control_operations(slot.clone());
+    let messages = slot.clone();
+    let events = slot.clone();
+    let startup = slot.clone();
+    let engine = slot.clone();
+    let initialize = prepared.clone();
     let plugin = SimplePlugin::new(metadata)
         .with_operation_router(operations)
-        // After the handshake: opening a wallet must not consume the host's
-        // initialize-response timeout. Manifest inspection never reaches here.
-        .on_initialized(move |context| {
-            let engine = startup.clone();
-            let mut context = context.owned();
-            let wallet_context = wallet_context.clone();
+        .on_initialize(move |request, _context| {
+            let setup = setup.clone();
+            let prepared = initialize.clone();
             Box::pin(async move {
-                for model in engine.service.ledger.pricing()?.keys() {
-                    context
-                        .require_channels_for_model(model, &[(CHANNEL, &[])])
-                        .await?;
-                }
-                if let Some(wallet_context) = wallet_context {
-                    ensure!(
-                        context.host_supports(mesh_llm_plugin::operation_binding::CAPABILITY),
-                        "host does not support operation bindings"
-                    );
-                    let _ = wallet_context.set(context.owned());
-                }
-                engine.start().await?;
-                observe_receipts(Arc::downgrade(&engine));
+                let ready = prepare(&setup, &request.settings_json)?;
+                *prepared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ready);
                 Ok(())
             })
         })
+        // After the handshake: opening a wallet must not consume the host's
+        // initialize-response timeout. Manifest inspection never reaches here.
+        .on_initialized(move |context| {
+            let slot = startup.clone();
+            let prepared = prepared.clone();
+            let namespace = namespace.clone();
+            let mut context = context.owned();
+            let wallet_context = wallet_context.clone();
+            Box::pin(async move {
+                let ready = prepared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                    .context("pay-lightning settings missing")?;
+                start(&slot, &namespace, ready, &mut context, wallet_context).await
+            })
+        })
         .on_channel_message(move |message, context| {
-            let engine = messages.clone();
+            let slot = messages.clone();
             let mut context = context.owned();
             Box::pin(async move {
+                let engine = engine_of(&slot)?;
                 let detached = serde_json::from_slice::<Message>(&message.body).is_ok_and(|body| {
                     matches!(
                         body,
@@ -204,9 +311,10 @@ async fn run_with_context(
             })
         })
         .on_mesh_event(move |event, context| {
-            let engine = events.clone();
+            let slot = events.clone();
             let mut context = context.owned();
             Box::pin(async move {
+                let engine = engine_of(&slot)?;
                 if event.kind == mesh_llm_plugin::proto::mesh_event::Kind::PeerDown as i32
                     && let Some(peer) = &event.peer
                 {
@@ -240,9 +348,11 @@ async fn run_with_context(
             })
         })
         .with_openai_exchange_handler(move |_name, event, context| {
-            let engine = engine.clone();
+            let slot = engine.clone();
             let mut context = context.owned();
             Box::pin(async move {
+                let engine = engine_of(&slot)
+                    .map_err(|error| mesh_llm_plugin::PluginError::internal(error.to_string()))?;
                 // Terminal wallet work is detached; it must not consume the hook's deadline.
                 if event["phase"] == "exchange_finished" {
                     tokio::spawn(async move {
@@ -368,7 +478,7 @@ fn record_error(error: &anyhow::Error) {
 /// The operator surface `mesh-llm wallet …` forwards to: one published
 /// operation taking a `ControlCommand`. Peers never reach it; the host only
 /// dispatches published operations from its local API.
-fn control_operations(engine: Arc<Engine>) -> mesh_llm_plugin::OperationRouter {
+fn control_operations(slot: EngineSlot) -> mesh_llm_plugin::OperationRouter {
     let mut operations = mesh_llm_plugin::OperationRouter::new();
     operations.add_raw(
         mesh_llm_plugin::operation_with_schema(
@@ -377,8 +487,9 @@ fn control_operations(engine: Arc<Engine>) -> mesh_llm_plugin::OperationRouter {
             serde_json::Map::new(),
         ),
         move |request, _context| {
-            let engine = engine.clone();
+            let slot = slot.clone();
             Box::pin(async move {
+                let engine = engine_of(&slot)?;
                 let command: mesh_llm_payments::control::ControlCommand = request.arguments()?;
                 // Durable settlement continues even if the caller goes away.
                 let result = tokio::spawn(async move { engine.service.control(command).await })

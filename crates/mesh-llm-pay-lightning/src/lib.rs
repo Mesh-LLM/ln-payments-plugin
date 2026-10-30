@@ -30,7 +30,7 @@ use mesh_llm_plugin::openai_exchange::{
     OpenAiAdmissionDecision as Decision, OpenAiExchangeDecision,
 };
 use mesh_llm_wallet::invoice::Invoice;
-pub use runtime::{run, run_bound};
+pub use runtime::{BoundSettings, run, run_bound};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

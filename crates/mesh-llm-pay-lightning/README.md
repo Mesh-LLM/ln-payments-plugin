@@ -34,7 +34,7 @@ was when payments were built into mesh-llm:
 ## Explicit operator binding (optional)
 
 A `[[plugin]]` entry overrides any of the above: the three settings in
-`MESH_LLM_PLUGIN_SETTINGS_JSON`, and a named provider binding:
+the host's initialize handshake (`settings_json`), and a named provider binding:
 
 ```toml
 [[plugin]]

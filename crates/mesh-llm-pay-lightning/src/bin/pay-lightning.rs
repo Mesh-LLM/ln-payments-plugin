@@ -39,9 +39,21 @@ async fn main() -> Result<()> {
         )?;
         return Ok(());
     }
-    let launch: Launch = match std::env::var("MESH_LLM_PLUGIN_SETTINGS_JSON") {
-        Ok(settings) if !settings.trim().is_empty() => serde_json::from_str(&settings)?,
-        _ => Launch::default(),
+    mesh_llm_pay_lightning::run_bound(
+        "pay-lightning".into(),
+        env!("CARGO_PKG_VERSION"),
+        bound_settings,
+    )
+    .await
+}
+
+/// The operator's `[plugin.settings]`, delivered in the host's initialize
+/// handshake (`"{}"` when none are set).
+fn bound_settings(settings_json: &str) -> Result<mesh_llm_pay_lightning::BoundSettings> {
+    let launch: Launch = if settings_json.trim().is_empty() {
+        Launch::default()
+    } else {
+        serde_json::from_str(settings_json)?
     };
     let config = match launch.config_path {
         Some(path) => {
@@ -60,12 +72,9 @@ async fn main() -> Result<()> {
         .wallet_binding
         .filter(|binding| !binding.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_WALLET_BINDING.to_owned());
-    mesh_llm_pay_lightning::run_bound(
-        "pay-lightning".into(),
-        env!("CARGO_PKG_VERSION"),
+    Ok(mesh_llm_pay_lightning::BoundSettings {
         wallet_binding,
-        launch.allow_wallet_provisioning.unwrap_or(true),
+        allow_wallet_provisioning: launch.allow_wallet_provisioning.unwrap_or(true),
         config,
-    )
-    .await
+    })
 }
