@@ -4,8 +4,8 @@ Lightning payments for mesh-llm as an installable plugin, `pay-lightning`, plus
 the payment-engine crates it is built from. Moved out of `Mesh-LLM/mesh-llm`
 (`mesh/crates/`, PR [#2654](https://github.com/Mesh-LLM/mesh-llm/pull/2654),
 branch `jimmy/lightning-wallet-library`). mesh-llm keeps only the generic
-seams — operation bindings, OpenAI-exchange hooks and the `mesh-llm wallet` CLI
-forward — and links none of these crates.
+seams — operation bindings, OpenAI-exchange hooks and the generic
+`mesh-llm plugins call` — and links none of these crates.
 
 **Work in progress.** Not released, not in the plugin catalog, no compatibility
 with the built-in payment path in released mesh-llm. A zero-config paid
@@ -21,7 +21,7 @@ baseline, not a readiness claim.
 
 mesh-llm SDK crates (`mesh-llm-plugin`, `mesh-llm-events`,
 `mesh-llm-plugin-manager`) are git dependencies pinned to #2654 commit
-`eba2a8ecf`. Wallet plugins (`Mesh-LLM/lexe-wallet`, nwc, ldk) are separate
+`cd9edd70c`. Wallet plugins (`Mesh-LLM/lexe-wallet`, nwc, ldk) are separate
 repositories and are unchanged.
 
 ## How it works
@@ -39,27 +39,32 @@ repositories and are unchanged.
   `wallet_pay`, …) is a `plugin/bound_operation` RPC with a host-minted handle.
   One binding owns one provider; two running wallet plugins are refused until
   the operator names one.
-- **Seller.** `mesh-llm wallet pricing <model> --input-msat-per-million …
-  --output-msat-per-million …` prices a model. A request for a priced model
+- **Seller.** A `set_pricing` control command (see **Control** below) prices
+  a model. A request for a priced model
   without a valid ticket is answered `402 Payment Required` with the pay-terms
   header; a buyer that negotiates over `pay.ln.v1` pays a deposit, inference
   runs, and the final bill is settled from the backend-reported usage.
-- **Buyer.** Spends under the ledger policy only —
-  `mesh-llm wallet policy --mode automatic --daily-budget-sats N` — the same
-  rule built-in payments used; the handshake starts when a request selects
+- **Buyer.** Spends under the ledger policy only — a `policy` control
+  command with `mode: automatic` and a `daily_budget_msat` — the same rule
+  built-in payments used; the handshake starts when a request selects
   that seller. The default policy is `free_only`, so a fresh install buys
   nothing and gets the 402.
 - **State** lives in `~/.mesh-llm/payments/`: `payment.json` (created with
   non-spending defaults), the ledger, `wallet-provider.json` and
   `wallets/<wallet plugin>/` — the layout built-in payments used, so an
   existing wallet is found again.
-- **CLI.** `mesh-llm wallet balance|fund|send|transactions|pending|policy|
-  pricing|…` forward to the plugin's published `control` operation over the
-  node's local API.
+- **Control.** mesh-llm has no `wallet` command. Everything goes through the
+  plugin's published `control` operation via the generic
+  `mesh-llm plugins call pay-lightning control --input '<json>'` (node API
+  port, `--port`, default 3131). The input is a `ControlCommand`
+  (`crates/mesh-llm-payments-types/src/control.rs`), tagged by `"command"` in
+  snake_case: `balance`, `transactions`, `fund`, `send`, `pending`, `policy`,
+  `pricing`, `set_pricing`, `min_payment`, `admission_deposit`, `blocked`,
+  `unblock`, `unpin`, …
 
 ## Build, package, install
 
-Needs a mesh-llm built from #2654 (`eba2a8ecf` or later on that branch);
+Needs a mesh-llm built from #2654 (`cd9edd70c` or later on that branch);
 released mesh-llm has none of the seams.
 
 ```sh
@@ -78,11 +83,22 @@ does not install one, and installing a wallet does not install `pay-lightning`.
 Without a wallet plugin `pay-lightning` starts but every wallet call is refused
 (`no running plugin serves wallet.v1`).
 
-Then on the seller `mesh-llm --model <model> --console <port>` and
-`mesh-llm wallet --port <console port> pricing <model> …`; on the buyer
-`mesh-llm client --join <token> --console <port>` and
-`mesh-llm wallet --port <console port> policy --mode automatic --daily-budget-sats 600`.
-Nothing else is written by hand.
+Then on the seller, start `mesh-llm --model <model>` and price the model:
+
+```sh
+mesh-llm plugins call pay-lightning control --input \
+  '{"command":"set_pricing","model":"<model>","value":{"input_msat_per_million":1000,"output_msat_per_million":1000}}'
+```
+
+On the buyer, start `mesh-llm client --join <token>` and allow spending:
+
+```sh
+mesh-llm plugins call pay-lightning control --input \
+  '{"command":"policy","value":{"mode":"automatic","daily_budget_msat":600000}}'
+```
+
+Add `--port <api port>` if the node API is not on 3131. Nothing else is
+written by hand.
 
 ## Status (2026-10-29)
 
@@ -99,7 +115,7 @@ independently re-derived by a second reviewer:
 
 Known gaps, none of them signed off:
 
-- `mesh-llm wallet unpin` is unsupported in the plugin shape (it needs a
+- The `unpin` control command is unsupported in the plugin shape (it needs a
   stopped-node path the plugin does not have).
 - The seller's brand-new Lexe wallet reported `spendable_msat: 0` after five
   settled inbound payments — unresolved, not attributed.
