@@ -16,6 +16,7 @@ struct Network {
     sends: AtomicUsize,
     balances: AtomicUsize,
     slow_lookup: Mutex<Option<String>>,
+    fail_next_pay: std::sync::atomic::AtomicBool,
 }
 struct Wallet(Arc<Network>, bool);
 pub(crate) fn invoice(number: u8, amount: u64) -> Invoice {
@@ -57,6 +58,21 @@ impl WalletProvider for Wallet {
         _: u64,
     ) -> std::result::Result<Transaction, PayError> {
         self.0.sends.fetch_add(1, Ordering::SeqCst);
+        if self.0.fail_next_pay.swap(false, Ordering::SeqCst) {
+            // A brand-new seller wallet the buyer cannot route to yet.
+            return Ok(Transaction {
+                id: invoice.payment_hash.clone(),
+                payment_hash: Some(invoice.payment_hash.clone()),
+                inbound: false,
+                amount_msat: amount,
+                fee_msat: 0,
+                status: PaymentStatus::Failed,
+                claiming: false,
+                status_msg: Some("could not find usable route to send payment over".into()),
+                created_at_ms: mesh_llm_wallet::now_ms(),
+                settled_at_ms: Some(mesh_llm_wallet::now_ms()),
+            });
+        }
         let payment = Transaction {
             id: invoice.payment_hash.clone(),
             payment_hash: Some(invoice.payment_hash.clone()),
@@ -915,5 +931,98 @@ async fn slow_receipt_lookup_does_not_delay_another_paid_receipt() {
             .metered_unpaid_finals("buyer")
             .unwrap(),
         2
+    );
+}
+
+/// Run12 cold start: the first deposit to a brand-new seller wallet failed
+/// with no route, and every later request waited out the deadline because the
+/// seller kept quoting the same dead invoice and the connected buyer never
+/// quoted again. A definitively failed deposit must lead to a fresh invoice on
+/// the next request, with no restart and no second payment of the dead one.
+#[tokio::test]
+async fn failed_cold_deposit_quotes_a_fresh_invoice_on_the_next_request() {
+    let f = Fixture::new();
+    f.network.fail_next_pay.store(true, Ordering::SeqCst);
+    // First request: connect and quote.
+    let opening = f.buyer.peer_up("seller").await.unwrap();
+    assert!(matches!(opening.last().unwrap(), Message::Quote));
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    let Message::Admission {
+        invoice: Some(dead),
+        ..
+    } = &admission
+    else {
+        panic!("cold admission carries a deposit invoice")
+    };
+    let dead = dead.payment_hash.clone();
+    let mut failed = f.buyer.channel("seller", admission).await.unwrap();
+    assert!(matches!(&failed[..], [Message::DepositFailed { .. }]));
+    let failed = failed.remove(0);
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1);
+    assert!(f.seller.channel("buyer", failed).await.unwrap().is_empty());
+    assert_eq!(
+        f.seller.gate(&gate("x", "buyer")).unwrap().status,
+        Some(402),
+        "nothing was paid, so nothing is admitted"
+    );
+
+    // Next request on the same connection quotes again and gets a new invoice.
+    let again = f.buyer.peer_up("seller").await.unwrap();
+    assert!(matches!(&again[..], [Message::Quote]));
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    let Message::Admission {
+        invoice: Some(fresh),
+        ..
+    } = &admission
+    else {
+        panic!("fresh admission carries a deposit invoice")
+    };
+    assert_ne!(fresh.payment_hash, dead);
+    let paid = f
+        .buyer
+        .channel("seller", admission)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(matches!(paid, Message::Paid { .. }));
+    f.seller.channel("buyer", paid).await.unwrap();
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        f.seller.gate(&gate("x", "buyer")).unwrap().decision,
+        Decision::Allow
+    );
+    // The retry is one-shot: a healthy connection does not keep re-quoting.
+    assert!(f.buyer.peer_up("seller").await.unwrap().is_empty());
+}
+
+/// Only a deposit the ledger closed as failed is retried. A forged report
+/// from another peer, or for a ticket already paid, discards nothing.
+#[tokio::test]
+async fn deposit_failed_from_wrong_peer_or_for_paid_ticket_discards_nothing() {
+    let f = Fixture::new();
+    let id = f.prepare().await;
+    assert!(
+        f.seller
+            .channel("attacker", Message::DepositFailed { id: id.clone() })
+            .await
+            .is_err()
+    );
+    f.seller
+        .channel("buyer", Message::DepositFailed { id })
+        .await
+        .unwrap();
+    assert_eq!(
+        f.seller.gate(&gate("x", "buyer")).unwrap().decision,
+        Decision::Allow
     );
 }

@@ -67,6 +67,13 @@ pub enum Message {
     Abandoned {
         id: String,
     },
+    /// Buyer to seller: the deposit for this admission definitively failed
+    /// in the buyer's wallet (for example no route yet to a brand-new seller
+    /// wallet). The seller drops the unpaid ticket so the next quote carries
+    /// a fresh invoice instead of the dead one.
+    DepositFailed {
+        id: String,
+    },
 }
 
 impl Message {
@@ -80,6 +87,7 @@ impl Message {
             Self::Settlement { .. } => "settlement",
             Self::Recover { .. } => "recover",
             Self::Abandoned { .. } => "abandoned",
+            Self::DepositFailed { .. } => "deposit_failed",
         }
     }
 }
@@ -90,6 +98,8 @@ pub struct Engine {
     connected: connections::Connections,
     vouched: std::sync::Mutex<BTreeSet<String>>,
     ready_seen: std::sync::Mutex<BTreeSet<String>>,
+    /// Sellers whose last deposit failed; the next selected request quotes again.
+    requote: std::sync::Mutex<BTreeSet<String>>,
     buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
     changed: tokio::sync::Notify,
     receipt_schedule: std::sync::Mutex<receipt_schedule::ReceiptSchedule>,
@@ -113,6 +123,7 @@ impl Engine {
             connected: Default::default(),
             vouched: Default::default(),
             ready_seen: Default::default(),
+            requote: Default::default(),
             buyer_ready: Default::default(),
             changed: Default::default(),
             receipt_schedule: Default::default(),
@@ -254,6 +265,11 @@ impl Engine {
                 Ok(vec![Message::Quote])
             }
             Message::Ready { id } => self.receive_ready(peer, id),
+            Message::DepositFailed { id } => {
+                self.owner(peer, &id)?;
+                self.tickets.discard_unpaid(&id, peer)?;
+                Ok(vec![])
+            }
         }
     }
     /// Buyer side of a quoted admission: authorize against policy, pin the
@@ -303,12 +319,26 @@ impl Engine {
             })
             .await?;
         if let Some(invoice) = invoice {
-            self.service
+            let hash = invoice.payment_hash.clone();
+            if let Err(error) = self
+                .service
                 .pay_deposit(PayDepositRequest {
                     request_id: terms.id.clone(),
                     invoice,
                 })
-                .await?;
+                .await
+            {
+                // Only a charge the ledger closed as failed is retried with a
+                // fresh invoice; an unresolved one may still settle and must
+                // never be paid twice.
+                if self.service.ledger.charge_state(&hash)?.as_deref() != Some("failed") {
+                    return Err(error);
+                }
+                crate::diagnostics::record_error(&error.context("deposit failed; quoting again"));
+                // The ledger already closed the request as failed with its charge.
+                self.requote.lock().unwrap().insert(peer.into());
+                return Ok(vec![Message::DepositFailed { id: terms.id }]);
+            }
         }
         Ok(vec![Message::Paid { id: terms.id }])
     }
@@ -384,8 +414,13 @@ impl Engine {
         // not start a duplicate payment or send another hello/recover sequence.
         let _handshake = self.connected.handshake.lock().await;
         let Some(epoch) = self.connected.begin(peer) else {
+            // Connected already: quote again only after a failed deposit.
+            if self.requote.lock().unwrap().remove(peer) {
+                return Ok(vec![Message::Quote]);
+            }
             return Ok(vec![]);
         };
+        self.requote.lock().unwrap().remove(peer);
         let mut messages = Vec::new();
         // Observe uncertain payments before asking the authenticated seller for stored outcomes.
         for terms in self.service.reconcile().await?.approved {

@@ -26,7 +26,10 @@ pub fn record_error(error: &anyhow::Error) {
             .open(path)
     {
         let _ = writeln!(file, "{}", serde_json::json!({"error":error.to_string()}));
+        return;
     }
+    // No error log configured: stderr, so a failure is never unrecorded.
+    eprintln!("pay-lightning: {error:#}");
 }
 static RECORD_WRITE: Mutex<()> = Mutex::new(());
 

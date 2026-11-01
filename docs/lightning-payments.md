@@ -124,6 +124,15 @@ make a warm peer cold; only the separate three-final admission limit blocks it.
 The cache is in memory, bounded to 1,024 peers and cleared when full,
 so losing it means the next request asks for a deposit again.
 
+A deposit the buyer's wallet definitively fails (for example no route yet to a
+brand-new seller wallet) is not retried against the same invoice. The buyer
+sends `DepositFailed { id }`; the seller drops that unpaid ticket, and the
+buyer's next selected request quotes again and pays a fresh invoice. Only a
+charge the buyer's ledger closed as failed qualifies: an unresolved payment may
+still settle and is never paid twice, and a ready or consumed ticket is never
+dropped. Without this, a single failed cold deposit left the seller quoting the
+same dead invoice until restart.
+
 `Recover { id }` lets a payer refetch the settlement of a request after a
 disconnect or restart. It never re-dispatches: a request still in progress is
 answered `Pending`, an abandoned one with a null-usage `Settlement` and

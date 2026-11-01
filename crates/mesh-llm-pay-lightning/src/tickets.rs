@@ -71,6 +71,15 @@ impl Tickets {
     pub fn admission(&self, peer: &str, model: &str) -> Result<Option<String>> {
         Ok(self.0.lock().unwrap().query_row("SELECT admission FROM tickets WHERE peer=?1 AND model=?2 AND exchange IS NULL AND admission IS NOT NULL ORDER BY rowid LIMIT 1", params![peer,model], |r|r.get(0)).optional()?)
     }
+    /// Drop an admission whose deposit the buyer reports failed. A ticket
+    /// that is ready or consumed was paid and is never discarded.
+    pub fn discard_unpaid(&self, id: &str, peer: &str) -> Result<()> {
+        self.0.lock().unwrap().execute(
+            "DELETE FROM tickets WHERE id=?1 AND peer=?2 AND ready=0 AND exchange IS NULL",
+            params![id, peer],
+        )?;
+        Ok(())
+    }
     pub fn outstanding(&self, peer: &str, model: &str) -> Result<bool> {
         Ok(self.0.lock().unwrap().query_row(
             "SELECT EXISTS(SELECT 1 FROM tickets WHERE peer=?1 AND model=?2 AND exchange IS NULL)",
