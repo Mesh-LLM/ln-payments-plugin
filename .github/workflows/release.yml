@@ -1,0 +1,89 @@
+name: Release
+
+# Push a tag `v<version>` matching the workspace version in Cargo.toml.
+# Publishes one archive per target in the layout `mesh-llm plugins install`
+# expects: `pay-lightning-v<version>-<target>.tar.gz` with a `pay-lightning/`
+# root holding the executable, plugin.toml and plugin-manifest.json.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - name: Check tag matches workspace version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test "$GITHUB_REF_NAME" = "v$v"
+      - name: Verify
+        run: |
+          just check
+          just test
+      - name: Package
+        run: |
+          just package
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "${{ matrix.target }}"
+          cd dist
+          for f in pay-lightning-*-${{ matrix.target }}.tar.gz; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+      - name: Smoke extracted archive
+        run: |
+          mkdir -p .smoke && tar xzf dist/pay-lightning-*-${{ matrix.target }}.tar.gz -C .smoke
+          .smoke/pay-lightning/pay-lightning --manifest > /dev/null
+          test -f .smoke/pay-lightning/plugin.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pay-lightning-${{ matrix.target }}
+          if-no-files-found: error
+          path: dist/pay-lightning-*-${{ matrix.target }}.tar.gz*
+
+  publish:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish exact tested archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          sha256sum -c ./*.sha256
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "pay-lightning $GITHUB_REF_NAME" \
+            --notes 'pay-lightning plugin for mesh-llm. Pair with a wallet.v1 provider (lexe-wallet). See README for setup.' \
+            ./*.tar.gz ./*.sha256
