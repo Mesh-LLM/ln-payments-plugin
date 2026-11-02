@@ -2,6 +2,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 target := `rustc -vV | sed -n 's/^host: //p'`
+exe := if os_family() == "windows" { ".exe" } else { "" }
 version := `sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1`
 
 check:
@@ -17,9 +18,9 @@ build:
 # Stage and archive the installable plugin: dist/pay-lightning-v<version>-<target>.tar.gz
 package: build
     rm -rf dist/pay-lightning && mkdir -p dist/pay-lightning
-    cp target/release/pay-lightning dist/pay-lightning/
-    ./target/release/pay-lightning --manifest > dist/pay-lightning/plugin-manifest.json
+    cp target/release/pay-lightning{{exe}} dist/pay-lightning/
+    ./target/release/pay-lightning{{exe}} --manifest > dist/pay-lightning/plugin-manifest.json
     printf 'name = "pay-lightning"\nversion = "{{version}}"\n' > dist/pay-lightning/plugin.toml
     cp crates/mesh-llm-pay-lightning/README.md dist/pay-lightning/README.md
     tar czf "dist/pay-lightning-v{{version}}-{{target}}.tar.gz" -C dist pay-lightning
-    shasum -a 256 "dist/pay-lightning-v{{version}}-{{target}}.tar.gz"
+    if command -v sha256sum >/dev/null; then sha256sum "dist/pay-lightning-v{{version}}-{{target}}.tar.gz"; else shasum -a 256 "dist/pay-lightning-v{{version}}-{{target}}.tar.gz"; fi
