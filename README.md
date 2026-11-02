@@ -65,16 +65,21 @@ repositories and are unchanged.
 ## Build, package, install
 
 Needs a mesh-llm built from #2654 (`cd9edd70c` or later on that branch);
-released mesh-llm has none of the seams.
+released mesh-llm has none of the seams. Installing by repository name
+(`Mesh-LLM/ln-payments-plugin`, whose assets are `pay-lightning-*`) also
+needs mesh-llm #2809; without it use `--archive`.
 
 ```sh
 just check                # fmt + clippy
 just test                 # serial; the suite is flaky in parallel
 just package              # dist/pay-lightning-v<version>-<target>.tar.gz
 
-mesh-llm plugins install Mesh-LLM/lexe-wallet
-mesh-llm plugins install --archive dist/pay-lightning-v0.1.0-<target>.tar.gz \
-    --name pay-lightning --version 0.1.0
+mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin
+mesh-llm plugins install Mesh-LLM/ln-payments-plugin   # installs as pay-lightning
+
+# or from a local build:
+mesh-llm plugins install --archive dist/pay-lightning-v0.1.1-<target>.tar.gz \
+    --name pay-lightning --version 0.1.1
 ```
 
 Install **both** plugins, in either order, before starting the node. The host
