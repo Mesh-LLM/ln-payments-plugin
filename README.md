@@ -65,18 +65,16 @@ repositories and are unchanged.
 ## Build, package, install
 
 Needs a mesh-llm built from #2654 (`cd9edd70c` or later on that branch);
-released mesh-llm has none of the seams. Install by catalog name, like every
-other `*-plugin` repo; the catalog lines are in `catalog/plugins.jsonl`, and CI
-installs them through mesh-llm's real installer on Linux, macOS and Windows.
-Until they are published to the catalog, use `--archive` with a release asset.
+released mesh-llm has none of the seams. Install straight from the repo; CI
+installs the release this way through mesh-llm's real installer on Linux,
+macOS and Windows.
 
 ```sh
 just check                # fmt + clippy
 just test                 # serial; the suite is flaky in parallel
 just package              # dist/pay-lightning-v<version>-<target>.tar.gz
 
-mesh-llm plugins install lexe-wallet
-mesh-llm plugins install pay-lightning
+mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin Mesh-LLM/ln-payments-plugin
 
 # or from a local build:
 mesh-llm plugins install --archive dist/pay-lightning-v0.1.1-<target>.tar.gz \
@@ -126,7 +124,7 @@ Known gaps, none of them signed off:
 - The seller's brand-new Lexe wallet reported `spendable_msat: 0` after five
   settled inbound payments — unresolved, not attributed.
 - The test suite is flaky in parallel; `just test` runs it serially.
-- Catalog lines are prepared (`catalog/plugins.jsonl`) but not yet published; `pay-lightning` is both the installed plugin name
+- Not in the plugin catalog (not needed); `pay-lightning` is both the installed plugin name
   and the protocol slot — naming is under review.
 - Install UX: install `pay-lightning` and a wallet plugin by hand for now.
   Neither plugin names the other: `pay-lightning` asks for an opaque wallet
