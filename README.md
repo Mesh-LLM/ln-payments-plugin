@@ -73,8 +73,8 @@ just test                 # serial; the suite is flaky in parallel
 just package              # dist/pay-lightning-v<version>-<target>.tar.gz
 
 mesh-llm plugins install Mesh-LLM/lexe-wallet
-mesh-llm plugins install --archive dist/pay-lightning-v0.78.0-<target>.tar.gz \
-    --name pay-lightning --version 0.78.0
+mesh-llm plugins install --archive dist/pay-lightning-v0.1.0-<target>.tar.gz \
+    --name pay-lightning --version 0.1.0
 ```
 
 Install **both** plugins, in either order, before starting the node. The host
