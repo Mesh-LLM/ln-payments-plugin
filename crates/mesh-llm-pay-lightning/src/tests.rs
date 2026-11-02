@@ -555,7 +555,7 @@ async fn selected_buyer_waits_for_authenticated_ready_and_consumes_it_once() {
     let f = Fixture::new();
     let wait = f
         .buyer
-        .buyer_wait("seller", "model", std::time::Duration::from_secs(2));
+        .buyer_wait("seller", "model", None, std::time::Duration::from_secs(2));
     let deliver = async {
         tokio::task::yield_now().await;
         let admission = f
@@ -592,7 +592,12 @@ async fn selected_buyer_waits_for_authenticated_ready_and_consumes_it_once() {
         .unwrap();
     let denied = f
         .buyer
-        .buyer_wait("seller", "model", std::time::Duration::from_millis(10))
+        .buyer_wait(
+            "seller",
+            "model",
+            None,
+            std::time::Duration::from_millis(10),
+        )
         .await
         .unwrap();
     assert_eq!(denied.decision, Decision::Deny);
@@ -754,7 +759,7 @@ async fn issue_unpaid_finals(f: &Fixture) -> Vec<Message> {
         let event = gate(&format!("warm-{index}"), "buyer");
         assert_eq!(
             f.buyer
-                .buyer_wait("seller", "model", std::time::Duration::from_secs(1))
+                .buyer_wait("seller", "model", None, std::time::Duration::from_secs(1))
                 .await
                 .unwrap()
                 .decision,
@@ -1025,4 +1030,108 @@ async fn deposit_failed_from_wrong_peer_or_for_paid_ticket_discards_nothing() {
         f.seller.gate(&gate("x", "buyer")).unwrap().decision,
         Decision::Allow
     );
+}
+
+/// Both sides publish `payment.lifecycle.v1` for one cold, deposited request,
+/// each joined on its own host's OpenAI exchange ID, in the host's order.
+#[tokio::test]
+async fn both_sides_publish_lifecycle_events_joined_on_their_exchange() {
+    let f = Fixture::new();
+    let mut seller_events = f.seller.lifecycle.capture();
+    let mut buyer_events = f.buyer.lifecycle.capture();
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    let paid = f
+        .buyer
+        .channel("seller", admission)
+        .await
+        .unwrap()
+        .remove(0);
+    for reply in f.seller.channel("buyer", paid).await.unwrap() {
+        f.buyer.channel("seller", reply).await.unwrap();
+    }
+    assert!(
+        buyer_events.try_recv().is_err(),
+        "nothing before the exchange"
+    );
+    let decision = f
+        .buyer
+        .buyer_wait(
+            "seller",
+            "model",
+            Some("buyer-exchange"),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+    assert_ne!(decision.decision, Decision::Deny);
+    assert_eq!(
+        f.seller
+            .gate(&gate("seller-exchange", "buyer"))
+            .unwrap()
+            .decision,
+        Decision::Allow
+    );
+    let (_, settlement) = f
+        .seller
+        .terminal(&terminal(
+            "seller-exchange",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let paid = f
+        .buyer
+        .channel("seller", settlement)
+        .await
+        .unwrap()
+        .remove(0);
+    f.seller.channel("buyer", paid).await.unwrap();
+
+    let drain = |events: &mut tokio::sync::mpsc::Receiver<crate::lifecycle::Event>| {
+        std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>()
+    };
+    let buyer = drain(&mut buyer_events);
+    let phases: Vec<_> = buyer.iter().map(|e| e.phase).collect();
+    assert_eq!(
+        phases,
+        [
+            "terms_accepted",
+            "input_invoice_issued",
+            "input_settlement_observed",
+            "output_invoice_issued",
+            "output_settlement_observed",
+            "final_accounted"
+        ]
+    );
+    assert!(
+        buyer
+            .iter()
+            .all(|e| e.exchange_id == "buyer-exchange" && e.role == crate::lifecycle::Role::Payer)
+    );
+    assert_eq!(buyer[5].amount_msat, 3000);
+    let seller = drain(&mut seller_events);
+    let phases: Vec<_> = seller.iter().map(|e| e.phase).collect();
+    assert_eq!(
+        phases,
+        [
+            "input_invoice_issued",
+            "input_settlement_observed",
+            "delivered",
+            "output_invoice_issued",
+            "output_settlement_observed"
+        ]
+    );
+    assert!(
+        seller
+            .iter()
+            .all(|e| e.exchange_id == "seller-exchange"
+                && e.role == crate::lifecycle::Role::Provider)
+    );
+    assert_eq!(seller[2].tokens, Some(1000));
 }
