@@ -36,3 +36,10 @@ jobs:
         run: just test
       - name: package
         run: just package
+      - name: install via mesh-llm plugin-manager (packaged archive + catalog release)
+        env:
+          PAY_LIGHTNING_CATALOG_INSTALL: "1"
+        run: |
+          export PAY_LIGHTNING_ARCHIVE="$(ls "$PWD"/dist/pay-lightning-v*.{zip,tar.gz} 2>/dev/null | head -1)"
+          test -n "$PAY_LIGHTNING_ARCHIVE"
+          cargo test -p mesh-llm-pay-lightning --all-features --test catalog_install -- --test-threads=1 --nocapture
