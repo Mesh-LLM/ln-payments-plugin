@@ -51,6 +51,7 @@ async fn launch(root: &Path, config: &Path) -> (Child, LocalStream) {
                     host_capabilities: vec![
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.into(),
                         mesh_llm_plugin::operation_binding::CAPABILITY.into(),
+                        mesh_llm_plugin::host_capabilities::LOCAL_CHANNELS.into(),
                     ],
                     settings_json: serde_json::json!({"config_path":config,"wallet_binding":"test-wallet","allow_wallet_provisioning":true}).to_string(),
                     ..Default::default()

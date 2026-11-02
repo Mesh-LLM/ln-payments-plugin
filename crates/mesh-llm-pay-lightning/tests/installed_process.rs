@@ -93,7 +93,10 @@ async fn verify_unopened(stream: &mut LocalStream) {
             host_protocol_version: PROTOCOL_VERSION,
             host_version: "test".into(),
             host_info_json: "{}".into(),
-            host_capabilities: vec![mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.into()],
+            host_capabilities: vec![
+                mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.into(),
+                mesh_llm_plugin::host_capabilities::LOCAL_CHANNELS.into(),
+            ],
             mesh_visibility: proto::MeshVisibility::Private.into(),
             settings_json: "{}".into(),
         }),

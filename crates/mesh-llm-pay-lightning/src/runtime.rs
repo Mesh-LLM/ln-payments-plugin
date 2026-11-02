@@ -35,6 +35,7 @@ pub(crate) fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
         )
         .item(hook)
         .item(mesh_channel(CHANNEL))
+        .item(mesh_llm_plugin::local_channel(crate::lifecycle::CHANNEL))
         .operation_binding(mesh_llm_plugin::operation_binding(
             "wallet",
             "wallet.v1",
@@ -190,6 +191,7 @@ async fn start(
         );
         let _ = wallet_context.set(context.owned());
     }
+    engine.lifecycle.attach(context.owned());
     engine.start().await?;
     observe_receipts(Arc::downgrade(&engine));
     Ok(())
@@ -373,23 +375,7 @@ async fn run_with_setup(
                     && let Some(peer) = event["target_peer_id"].as_str()
                     && engine.buyer_enabled(peer).await
                 {
-                    let result: Result<_> = async {
-                        let model = event["model"].as_str().context("selected model missing")?;
-                        tokio::time::timeout(std::time::Duration::from_secs(28), async {
-                            for message in engine.peer_up(peer).await? {
-                                if let Err(error) = send(&mut context, peer, &message).await {
-                                    engine.peer_down(peer);
-                                    return Err(error);
-                                }
-                            }
-                            engine
-                                .buyer_wait(peer, model, std::time::Duration::from_secs(28))
-                                .await
-                        })
-                        .await
-                        .context("seller admission deadline exceeded")?
-                    }
-                    .await;
+                    let result = buyer_dispatch(&engine, peer, &event, &mut context).await;
                     return result.map_err(|error| {
                         mesh_llm_plugin::PluginError::internal(error.to_string())
                     });
@@ -412,6 +398,29 @@ async fn run_with_setup(
             })
         });
     PluginRuntime::run(plugin).await
+}
+
+/// Buyer: refresh the selected seller and wait for its authenticated Ready.
+async fn buyer_dispatch(
+    engine: &Engine,
+    peer: &str,
+    event: &serde_json::Value,
+    context: &mut PluginContext<'_>,
+) -> Result<mesh_llm_plugin::openai_exchange::OpenAiExchangeDecision> {
+    let model = event["model"].as_str().context("selected model missing")?;
+    let deadline = std::time::Duration::from_secs(28);
+    tokio::time::timeout(deadline, async {
+        for message in engine.peer_up(peer).await? {
+            if let Err(error) = send(context, peer, &message).await {
+                engine.peer_down(peer);
+                return Err(error);
+            }
+        }
+        let exchange = event["exchange_id"].as_str();
+        engine.buyer_wait(peer, model, exchange, deadline).await
+    })
+    .await
+    .context("seller admission deadline exceeded")?
 }
 
 pub(crate) fn observe_receipts(engine: std::sync::Weak<Engine>) {
@@ -572,7 +581,15 @@ mod tests {
             hook.phases,
             vec!["request_received", "backend_selected", "exchange_finished"]
         );
-        assert_eq!(manifest.mesh_channels.len(), 1);
-        assert_eq!(manifest.mesh_channels[0].name, CHANNEL);
+        // The payment protocol travels to peers; lifecycle events never leave the node.
+        let channels: Vec<_> = manifest
+            .mesh_channels
+            .iter()
+            .map(|channel| (channel.name.as_str(), channel.local))
+            .collect();
+        assert_eq!(
+            channels,
+            vec![(CHANNEL, false), (crate::lifecycle::CHANNEL, true)]
+        );
     }
 }

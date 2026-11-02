@@ -1,6 +1,7 @@
 //! Credit-first plugin protocol. A prepared admission is single-use and owner-bound.
 mod connections;
 pub mod diagnostics;
+pub mod lifecycle;
 mod receipt_schedule;
 mod runtime;
 mod tickets;
@@ -101,6 +102,10 @@ pub struct Engine {
     /// Sellers whose last deposit failed; the next selected request quotes again.
     requote: std::sync::Mutex<BTreeSet<String>>,
     buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
+    /// The ready admission each `buyer_ready` entry stands for.
+    ready_ids: std::sync::Mutex<BTreeMap<(String, String), String>>,
+    /// `payment.lifecycle.v1` publisher for the other plugins on this node.
+    pub lifecycle: lifecycle::Lifecycle,
     changed: tokio::sync::Notify,
     receipt_schedule: std::sync::Mutex<receipt_schedule::ReceiptSchedule>,
     pub service: Arc<PaymentService>,
@@ -125,6 +130,8 @@ impl Engine {
             ready_seen: Default::default(),
             requote: Default::default(),
             buyer_ready: Default::default(),
+            ready_ids: Default::default(),
+            lifecycle: Default::default(),
             changed: Default::default(),
             receipt_schedule: Default::default(),
             service,
@@ -209,9 +216,22 @@ impl Engine {
                     .is_some()
                     && !self.service.ledger.metered_past_admission(&id)?
                 {
-                    self.service.serve_deposit_confirmed(&id).await?;
+                    let settled = self.service.serve_deposit_confirmed(&id).await?;
+                    if let Some(receipt) = self.service.ledger.metered_invoice(
+                        &id,
+                        mesh_llm_payments::ledger::metered_invoices::MeteredInvoiceKind::Deposit,
+                    )? {
+                        self.lifecycle
+                            .provider_deposit(&id, &receipt.invoice, settled);
+                    }
                 }
                 let settlement = self.service.serve_recover(&id).await?;
+                if let ServeRecoverResponse::Billed { bill } = &settlement
+                    && bill.settled
+                    && let Some(invoice) = &bill.invoice
+                {
+                    self.lifecycle.provider_final_received(&id, invoice);
+                }
                 // A paid final may clear the strike limit while a prepared
                 // ticket is waiting at ingress, not only when a ticket readies.
                 self.changed.notify_waiters();
@@ -227,25 +247,7 @@ impl Engine {
                 }
                 Ok(replies)
             }
-            Message::Settlement { id, bill } => {
-                let terms = self
-                    .service
-                    .ledger
-                    .request_terms(&id)?
-                    .context("unknown buyer admission")?;
-                ensure!(terms.peer == peer, "settlement from wrong seller");
-                self.service
-                    .settle_final(SettleFinalRequest {
-                        request_id: id.clone(),
-                        usage: Some(bill.usage),
-                        bill_msat: Some(bill.bill_msat),
-                        deposit_applied_msat: bill.deposit_msat.min(bill.bill_msat),
-                        invoice: bill.invoice,
-                    })
-                    .await?;
-                self.service.finish_metered(&id).await?;
-                Ok(vec![Message::Paid { id }])
-            }
+            Message::Settlement { id, bill } => self.receive_settlement(peer, id, bill).await,
             Message::Recover { id } => {
                 self.owner(peer, &id)?;
                 Ok(match self.service.serve_recover(&id).await? {
@@ -262,6 +264,7 @@ impl Engine {
                     .context("unknown buyer admission")?;
                 ensure!(terms.peer == peer, "abandonment from wrong seller");
                 self.service.finish_metered(&id).await?;
+                self.lifecycle.abandoned(&id);
                 Ok(vec![Message::Quote])
             }
             Message::Ready { id } => self.receive_ready(peer, id),
@@ -271,6 +274,39 @@ impl Engine {
                 Ok(vec![])
             }
         }
+    }
+    /// Buyer: check the seller's bill, pay any final and close the request.
+    async fn receive_settlement(
+        &self,
+        peer: &str,
+        id: String,
+        bill: FinalBill,
+    ) -> Result<Vec<Message>> {
+        let terms = self
+            .service
+            .ledger
+            .request_terms(&id)?
+            .context("unknown buyer admission")?;
+        ensure!(terms.peer == peer, "settlement from wrong seller");
+        let final_invoice = bill.invoice.clone();
+        let settled = self
+            .service
+            .settle_final(SettleFinalRequest {
+                request_id: id.clone(),
+                usage: Some(bill.usage),
+                bill_msat: Some(bill.bill_msat),
+                deposit_applied_msat: bill.deposit_msat.min(bill.bill_msat),
+                invoice: bill.invoice,
+            })
+            .await?;
+        self.lifecycle.payer_settled(
+            &id,
+            final_invoice.as_ref(),
+            settled.payment.as_ref(),
+            settled.bill_msat,
+        );
+        self.service.finish_metered(&id).await?;
+        Ok(vec![Message::Paid { id }])
     }
     /// Buyer side of a quoted admission: authorize against policy, pin the
     /// terms, pay any deposit, and tell the seller it is paid.
@@ -318,26 +354,38 @@ impl Engine {
                 admission: terms.clone(),
             })
             .await?;
-        if let Some(invoice) = invoice {
+        let Some(invoice) = invoice else {
+            self.lifecycle.payer_admitted(&terms, cap, None);
+            return Ok(vec![Message::Paid { id: terms.id }]);
+        };
+        {
             let hash = invoice.payment_hash.clone();
-            if let Err(error) = self
+            match self
                 .service
                 .pay_deposit(PayDepositRequest {
                     request_id: terms.id.clone(),
-                    invoice,
+                    invoice: invoice.clone(),
                 })
                 .await
             {
-                // Only a charge the ledger closed as failed is retried with a
-                // fresh invoice; an unresolved one may still settle and must
-                // never be paid twice.
-                if self.service.ledger.charge_state(&hash)?.as_deref() != Some("failed") {
-                    return Err(error);
+                Ok(payment) => {
+                    self.lifecycle
+                        .payer_admitted(&terms, cap, Some((invoice, Some(payment))))
                 }
-                crate::diagnostics::record_error(&error.context("deposit failed; quoting again"));
-                // The ledger already closed the request as failed with its charge.
-                self.requote.lock().unwrap().insert(peer.into());
-                return Ok(vec![Message::DepositFailed { id: terms.id }]);
+                Err(error) => {
+                    // Only a charge the ledger closed as failed is retried with a
+                    // fresh invoice; an unresolved one may still settle and must
+                    // never be paid twice.
+                    if self.service.ledger.charge_state(&hash)?.as_deref() != Some("failed") {
+                        return Err(error);
+                    }
+                    crate::diagnostics::record_error(
+                        &error.context("deposit failed; quoting again"),
+                    );
+                    // The ledger already closed the request as failed with its charge.
+                    self.requote.lock().unwrap().insert(peer.into());
+                    return Ok(vec![Message::DepositFailed { id: terms.id }]);
+                }
             }
         }
         Ok(vec![Message::Paid { id: terms.id }])
@@ -349,11 +397,10 @@ impl Engine {
             .request_terms(&id)?
             .context("unknown ready ticket")?;
         ensure!(terms.peer == peer, "ready from wrong seller");
-        if self.ready_seen.lock().unwrap().insert(id) {
-            self.buyer_ready
-                .lock()
-                .unwrap()
-                .insert((peer.into(), terms.model));
+        if self.ready_seen.lock().unwrap().insert(id.clone()) {
+            let key = (peer.to_owned(), terms.model);
+            self.ready_ids.lock().unwrap().insert(key.clone(), id);
+            self.buyer_ready.lock().unwrap().insert(key);
             self.changed.notify_waiters();
         }
         Ok(vec![])
@@ -541,6 +588,7 @@ impl Engine {
         &self,
         peer: &str,
         model: &str,
+        exchange: Option<&str>,
         deadline: std::time::Duration,
     ) -> Result<OpenAiExchangeDecision> {
         ensure!(self.buyer_enabled(peer).await, "seller not authorized");
@@ -551,6 +599,11 @@ impl Engine {
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.buyer_ready.lock().unwrap().remove(&key) {
+                if let (Some(id), Some(exchange)) =
+                    (self.ready_ids.lock().unwrap().remove(&key), exchange)
+                {
+                    self.lifecycle.payer_dispatched(&id, exchange);
+                }
                 return Ok(OpenAiExchangeDecision::default());
             }
             if tokio::time::timeout_at(until, notified).await.is_err() {
@@ -603,6 +656,7 @@ impl Engine {
                 < mesh_llm_payments::ledger::metered::STRIKE_LIMIT
             && self.tickets.consume(peer, model, exchange)?
         {
+            self.provider_dispatched(exchange)?;
             return Ok(OpenAiExchangeDecision {
                 decision: Decision::Allow,
                 ..Default::default()
@@ -611,6 +665,20 @@ impl Engine {
 
         Ok(OpenAiExchangeDecision { decision: Decision::Deny, status: Some(402),
             response_headers: vec![(self.header.clone(), json!({"channel": CHANNEL, "model": model, "pricing": self.service.ledger.pricing()?[model]}).to_string())], ..Default::default() })
+    }
+    /// Seller: name the admission just consumed by `exchange` for lifecycle
+    /// observers, with the public terms it was quoted under.
+    fn provider_dispatched(&self, exchange: &str) -> Result<()> {
+        let Some((_, id)) = self.tickets.exchange(exchange)? else {
+            return Ok(());
+        };
+        let Some(admission) = self.tickets.saved_admission(&id)? else {
+            return Ok(());
+        };
+        if let Ok(Message::Admission { terms, .. }) = serde_json::from_str(&admission) {
+            self.lifecycle.provider_dispatched(&id, exchange, &terms);
+        }
+        Ok(())
     }
     pub async fn terminal(&self, event: &Value) -> Result<Option<(String, Message)>> {
         if event["phase"] != "exchange_finished"
@@ -627,18 +695,19 @@ impl Engine {
         };
         let usage = reported_usage(event);
         let message = if let Some(usage) = usage {
-            Message::Settlement {
-                id: id.clone(),
-                bill: self
-                    .service
-                    .serve_settle(ServeSettleRequest {
-                        request_id: id,
-                        usage,
-                    })
-                    .await?,
-            }
+            let bill = self
+                .service
+                .serve_settle(ServeSettleRequest {
+                    request_id: id.clone(),
+                    usage,
+                })
+                .await?;
+            self.lifecycle
+                .provider_billed(&id, usage.completion_tokens, bill.invoice.as_ref());
+            Message::Settlement { id, bill }
         } else {
             self.service.serve_abandon(&id)?;
+            self.lifecycle.abandoned(&id);
             Message::Abandoned { id }
         };
         Ok(Some((peer, message)))

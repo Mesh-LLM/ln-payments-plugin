@@ -71,6 +71,18 @@ impl Tickets {
     pub fn admission(&self, peer: &str, model: &str) -> Result<Option<String>> {
         Ok(self.0.lock().unwrap().query_row("SELECT admission FROM tickets WHERE peer=?1 AND model=?2 AND exchange IS NULL AND admission IS NOT NULL ORDER BY rowid LIMIT 1", params![peer,model], |r|r.get(0)).optional()?)
     }
+    /// The admission message saved for ticket `id`, consumed or not.
+    pub fn saved_admission(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .query_row("SELECT admission FROM tickets WHERE id=?1", [id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .optional()?
+            .flatten())
+    }
     /// Drop an admission whose deposit the buyer reports failed. A ticket
     /// that is ready or consumed was paid and is never discarded.
     pub fn discard_unpaid(&self, id: &str, peer: &str) -> Result<()> {
