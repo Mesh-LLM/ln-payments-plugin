@@ -75,4 +75,12 @@ async fn repo_install_from_release() {
         .unwrap();
     assert_eq!(outcome.metadata.name, "pay-lightning");
     assert_runs(&outcome.metadata);
+
+    // The wallet it needs installs the same way, into the same store.
+    let wallet = install_plugin("Mesh-LLM/lexe-wallet-plugin", &options, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(wallet.metadata.name, "lexe-wallet");
+    let exe = wallet.metadata.executable_path();
+    assert!(exe.is_file(), "installed wallet missing: {}", exe.display());
 }
