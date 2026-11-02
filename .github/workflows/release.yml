@@ -8,6 +8,9 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+  # Exercise packaging on PRs that change it; publish stays tag-only.
+  pull_request:
+    paths: ['.github/workflows/release.yml', 'Justfile']
 
 permissions:
   contents: read
