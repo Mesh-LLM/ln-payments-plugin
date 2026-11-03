@@ -371,10 +371,15 @@ async fn run_with_setup(
                     });
                     return Ok(Default::default());
                 }
+                // A buyer-side event never reaches the seller gate below, which
+                // would allow it: an exhausted budget must refuse a paid route.
                 if event["phase"] == "backend_selected"
                     && let Some(peer) = event["target_peer_id"].as_str()
-                    && engine.buyer_enabled(peer).await
                 {
+                    let model = event["model"].as_str().unwrap_or_default();
+                    if let Some(decision) = engine.buyer_refusal(peer, model).await {
+                        return Ok(decision);
+                    }
                     let result = buyer_dispatch(&engine, peer, &event, &mut context).await;
                     return result.map_err(|error| {
                         mesh_llm_plugin::PluginError::internal(error.to_string())

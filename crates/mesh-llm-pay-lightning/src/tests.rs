@@ -1135,3 +1135,93 @@ async fn both_sides_publish_lifecycle_events_joined_on_their_exchange() {
     );
     assert_eq!(seller[2].tokens, Some(1000));
 }
+
+/// Exhaust today's budget the way the live repro did: cap it at what is spent.
+async fn exhaust_budget(f: &Fixture) {
+    let available = f
+        .buyer
+        .service
+        .routing_budget(RoutingBudgetRequest {
+            request_intent: None,
+        })
+        .await
+        .available_msat;
+    f.buyer
+        .service
+        .ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(100_000 - available),
+        })
+        .unwrap();
+    assert!(!f.buyer.buyer_enabled("seller").await);
+}
+
+async fn ready_ticket(f: &Fixture) {
+    let id = f.prepare().await;
+    f.buyer
+        .channel("seller", Message::Ready { id })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn exhausted_budget_refuses_a_route_with_a_prepared_ticket() {
+    let f = Fixture::new();
+    assert!(f.buyer.buyer_refusal("seller", "model").await.is_none());
+    ready_ticket(&f).await;
+    exhaust_budget(&f).await;
+    let refused = f.buyer.buyer_refusal("seller", "model").await.unwrap();
+    assert_eq!(refused.decision, Decision::Deny);
+    assert_eq!(refused.status, Some(402));
+    // A free model, or a peer holding no ticket, is left to the seller's gate.
+    let free = f.buyer.buyer_refusal("seller", "free").await.unwrap();
+    assert_ne!(free.decision, Decision::Deny);
+    let other = f.buyer.buyer_refusal("other", "model").await.unwrap();
+    assert_ne!(other.decision, Decision::Deny);
+    // Restoring the budget dispatches again, through the kept ticket.
+    f.buyer
+        .service
+        .ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(100_000),
+        })
+        .unwrap();
+    assert!(f.buyer.buyer_refusal("seller", "model").await.is_none());
+}
+
+#[tokio::test]
+async fn ready_ticket_is_not_claimed_once_policy_stops_buying() {
+    let f = Fixture::new();
+    ready_ticket(&f).await;
+    f.buyer
+        .service
+        .ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::FreeOnly,
+            daily_budget_msat: None,
+        })
+        .unwrap();
+    // Policy changed after the ticket became ready: it is neither claimed nor
+    // dispatched, and the route is refused.
+    assert!(
+        f.buyer
+            .buyer_wait(
+                "seller",
+                "model",
+                None,
+                std::time::Duration::from_millis(10)
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        f.buyer
+            .buyer_refusal("seller", "model")
+            .await
+            .unwrap()
+            .status,
+        Some(402)
+    );
+}

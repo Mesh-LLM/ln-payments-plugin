@@ -583,6 +583,21 @@ impl Engine {
         ensure!(terms.peer == peer, "ready from wrong seller");
         Ok(self.vouched.lock().unwrap().insert(id.into()))
     }
+    /// Buyer: the decision for a selected backend this node may not buy from
+    /// right now, or `None` when it may and should dispatch. A ready ticket
+    /// with `peer` would let the seller serve and bill a request the policy no
+    /// longer permits, so that route is refused; without one the seller's own
+    /// ingress gate decides, which keeps free routes working.
+    pub async fn buyer_refusal(&self, peer: &str, model: &str) -> Option<OpenAiExchangeDecision> {
+        if self.buyer_enabled(peer).await {
+            return None;
+        }
+        let key = (peer.to_owned(), model.to_owned());
+        if self.buyer_ready.lock().unwrap().contains(&key) {
+            return Some(payment_required());
+        }
+        Some(OpenAiExchangeDecision::default())
+    }
     /// Only an authenticated seller's Ready permits dispatch, never Hello timing.
     pub async fn buyer_wait(
         &self,
@@ -599,6 +614,12 @@ impl Engine {
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.buyer_ready.lock().unwrap().remove(&key) {
+                // The policy may have changed while this request waited for
+                // Ready: claim the ticket only if buying is still permitted.
+                if !self.buyer_enabled(peer).await {
+                    self.buyer_ready.lock().unwrap().insert(key);
+                    return Ok(payment_required());
+                }
                 if let (Some(id), Some(exchange)) =
                     (self.ready_ids.lock().unwrap().remove(&key), exchange)
                 {
@@ -607,11 +628,7 @@ impl Engine {
                 return Ok(OpenAiExchangeDecision::default());
             }
             if tokio::time::timeout_at(until, notified).await.is_err() {
-                return Ok(OpenAiExchangeDecision {
-                    decision: Decision::Deny,
-                    status: Some(402),
-                    ..Default::default()
-                });
+                return Ok(payment_required());
             }
         }
     }
@@ -711,6 +728,14 @@ impl Engine {
             Message::Abandoned { id }
         };
         Ok(Some((peer, message)))
+    }
+}
+
+fn payment_required() -> OpenAiExchangeDecision {
+    OpenAiExchangeDecision {
+        decision: Decision::Deny,
+        status: Some(402),
+        ..Default::default()
     }
 }
 
