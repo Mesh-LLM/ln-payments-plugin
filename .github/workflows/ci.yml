@@ -36,3 +36,21 @@ jobs:
         run: just test
       - name: package
         run: just package
+      - name: install via mesh-llm plugin-manager (packaged archive + GitHub release)
+        # macOS runners share IPs and exhaust GitHub's anonymous API limit; the
+        # installer has no token hook, so macOS checks the published asset below instead.
+        run: |
+          if [ "$RUNNER_OS" != "macOS" ]; then export PAY_LIGHTNING_RELEASE_INSTALL=1; fi
+          export PAY_LIGHTNING_ARCHIVE="$(ls "$PWD"/dist/pay-lightning-v*.{zip,tar.gz} 2>/dev/null | head -1)"
+          test -n "$PAY_LIGHTNING_ARCHIVE"
+          cargo test -p mesh-llm-pay-lightning --all-features --test plugin_install -- --test-threads=1 --nocapture
+      - name: install published release asset (macOS, authenticated download)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p rel && gh release download -R Mesh-LLM/ln-payments-plugin -D rel -p "pay-lightning-v*-$(rustc -vV | sed -n 's/host: //p').tar.gz"
+          export PAY_LIGHTNING_ARCHIVE="$(ls "$PWD"/rel/pay-lightning-v*.{zip,tar.gz} 2>/dev/null | head -1)"
+          test -n "$PAY_LIGHTNING_ARCHIVE"
+          cargo test -p mesh-llm-pay-lightning --all-features --test plugin_install packaged_archive_installs -- --test-threads=1 --nocapture
