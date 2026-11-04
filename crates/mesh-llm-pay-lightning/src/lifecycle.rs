@@ -2,7 +2,9 @@
 //! published on a local channel to the other plugins on this node. The same
 //! event contract mesh-llm's host emitted before payments moved into this
 //! plugin; never a ledger, replay service or payment authority.
-use mesh_llm_payments_types::{contract::SettledReceived, metered_wire::AdmissionTerms};
+use mesh_llm_payments_types::{
+    contract::SettledReceived, metered_wire::AdmissionTerms, pricing::Pricing,
+};
 use mesh_llm_plugin::PluginContext;
 use mesh_llm_wallet::{
     invoice::Invoice,
@@ -57,6 +59,16 @@ pub struct Event {
     pub credited_msat: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_msat: Option<u64>,
+    /// The accepted terms' model and rates, on `terms_accepted` only: what
+    /// the selected seller charges, as the terms the payer accepted state it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_msat_per_million: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_msat_per_million: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_discount_percent: Option<u8>,
 }
 
 /// One observed paid exchange, named by the host's OpenAI exchange ID so its
@@ -66,6 +78,8 @@ pub struct Exchange {
     exchange_id: String,
     terms_digest: String,
     role: Role,
+    model: String,
+    pricing: Pricing,
 }
 
 impl Exchange {
@@ -74,6 +88,8 @@ impl Exchange {
             exchange_id: exchange_id.into(),
             terms_digest: terms_digest(exchange_id, terms)?,
             role,
+            model: terms.model.clone(),
+            pricing: terms.pricing.clone(),
         })
     }
 
@@ -85,7 +101,10 @@ impl Exchange {
             None,
             None,
             cap,
-            Extra::default(),
+            Extra {
+                terms: true,
+                ..Extra::default()
+            },
         )
     }
 
@@ -137,6 +156,7 @@ impl Exchange {
             Some(invoice.payment_hash.clone()),
             invoice.amount_msat.unwrap_or(0),
             Extra {
+                terms: false,
                 tokens: None,
                 credited_msat: settled.credited_msat,
                 fee_msat: settled.fee_msat,
@@ -214,6 +234,11 @@ impl Exchange {
             tokens: extra.tokens,
             credited_msat: extra.credited_msat,
             fee_msat: extra.fee_msat,
+            model: extra.terms.then(|| self.model.clone()),
+            input_msat_per_million: extra.terms.then_some(self.pricing.input_msat_per_million),
+            output_msat_per_million: extra.terms.then_some(self.pricing.output_msat_per_million),
+            cache_discount_percent: (extra.terms && self.pricing.cache_discount_percent != 0)
+                .then_some(self.pricing.cache_discount_percent),
         };
         event.event_ref = digest(&serde_json::to_value(&event).ok()?)?;
         Some(event)
@@ -222,6 +247,8 @@ impl Exchange {
 
 #[derive(Clone, Copy, Default)]
 struct Extra {
+    /// Carry the accepted terms' model and rates (`terms_accepted`).
+    terms: bool,
     tokens: Option<u64>,
     credited_msat: Option<u64>,
     fee_msat: Option<u64>,
