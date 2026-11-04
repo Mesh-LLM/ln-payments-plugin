@@ -394,6 +394,7 @@ mod tests {
                 status_msg: None,
                 created_at_ms: 1,
                 settled_at_ms: Some(2),
+                preimage: None,
             }
         }
     }

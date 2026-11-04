@@ -71,6 +71,7 @@ impl WalletProvider for Wallet {
                 status_msg: Some("could not find usable route to send payment over".into()),
                 created_at_ms: mesh_llm_wallet::now_ms(),
                 settled_at_ms: Some(mesh_llm_wallet::now_ms()),
+                preimage: None,
             });
         }
         let payment = Transaction {
@@ -84,6 +85,7 @@ impl WalletProvider for Wallet {
             status_msg: None,
             created_at_ms: mesh_llm_wallet::now_ms(),
             settled_at_ms: Some(mesh_llm_wallet::now_ms()),
+            preimage: None,
         };
         let mut incoming = payment.clone();
         incoming.inbound = true;
