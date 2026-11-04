@@ -86,6 +86,7 @@ fn event_contract_is_private_stable_and_self_checking() {
     for secret in ["private-recovery", "preimage", "bolt11", "lnbc", "prompt"] {
         assert!(!text.contains(secret), "{secret} leaked");
     }
+    assert!(text.contains(r#""input_msat_per_million":1000"#));
     let mut blank = json.clone();
     blank["event_ref"] = json!("");
     assert_eq!(digest(&blank).unwrap(), first.event_ref);
@@ -204,8 +205,9 @@ async fn nothing_is_emitted_before_dispatch_or_without_a_publisher() {
     assert!(events.try_recv().is_err(), "abandoned closes observation");
 }
 
-/// The accepted terms' rates ride on `terms_accepted`, on both sides, and on
-/// no other phase; the event still digests over them.
+/// The accepted terms' rates ride on `terms_accepted` and on no other phase;
+/// the event still digests over them. Only the payer emits `terms_accepted`
+/// in production; the provider role is checked here at unit level.
 #[test]
 fn terms_accepted_carries_the_rates_and_no_other_phase_does() {
     for role in [Role::Payer, Role::Provider] {
