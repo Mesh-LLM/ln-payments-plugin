@@ -10,6 +10,7 @@ use mesh_llm_wallet::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     sync::{Mutex, OnceLock},
@@ -40,7 +41,7 @@ impl Role {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Event {
     pub exchange_id: String,
     pub event_ref: String,
@@ -57,6 +58,33 @@ pub struct Event {
     pub credited_msat: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_msat: Option<u64>,
+    /// A settled payment's preimage, only when it hashes to `payment_hash`.
+    /// Bearer evidence: `Debug` redacts it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preimage: Option<String>,
+}
+
+/// Like a derived `Debug`, but `preimage` prints as `<redacted>`: it is bearer
+/// proof of payment and must not reach logs.
+impl std::fmt::Debug for Event {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Event")
+            .field("exchange_id", &self.exchange_id)
+            .field("event_ref", &self.event_ref)
+            .field("terms_digest", &self.terms_digest)
+            .field("role", &self.role)
+            .field("phase", &self.phase)
+            .field("source", &self.source)
+            .field("settlement", &self.settlement)
+            .field("segment", &self.segment)
+            .field("payment_hash", &self.payment_hash)
+            .field("amount_msat", &self.amount_msat)
+            .field("tokens", &self.tokens)
+            .field("credited_msat", &self.credited_msat)
+            .field("fee_msat", &self.fee_msat)
+            .field("preimage", &self.preimage.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// One observed paid exchange, named by the host's OpenAI exchange ID so its
@@ -118,6 +146,7 @@ impl Exchange {
             payment.amount_msat,
             Extra {
                 fee_msat: Some(payment.fee_msat),
+                preimage: payment.preimage.clone(),
                 ..Extra::default()
             },
         )
@@ -140,6 +169,7 @@ impl Exchange {
                 tokens: None,
                 credited_msat: settled.credited_msat,
                 fee_msat: settled.fee_msat,
+                preimage: settled.preimage.clone(),
             },
         )
     }
@@ -200,6 +230,7 @@ impl Exchange {
         amount_msat: u64,
         extra: Extra,
     ) -> Option<Event> {
+        let preimage = settled_preimage(extra.preimage.as_deref(), payment_hash.as_deref());
         let mut event = Event {
             exchange_id: self.exchange_id.clone(),
             event_ref: String::new(),
@@ -214,17 +245,31 @@ impl Exchange {
             tokens: extra.tokens,
             credited_msat: extra.credited_msat,
             fee_msat: extra.fee_msat,
+            preimage,
         };
         event.event_ref = digest(&serde_json::to_value(&event).ok()?)?;
         Some(event)
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct Extra {
     tokens: Option<u64>,
     credited_msat: Option<u64>,
     fee_msat: Option<u64>,
+    preimage: Option<String>,
+}
+
+/// The wallet's preimage for a settled payment, as lowercase hex, only when it
+/// is 32 bytes that hash to `payment_hash`. Anything else is dropped, so an
+/// event never carries a value that does not prove this payment.
+fn settled_preimage(preimage: Option<&str>, payment_hash: Option<&str>) -> Option<String> {
+    let preimage = preimage?.to_ascii_lowercase();
+    let bytes: [u8; 32] = hex::decode(&preimage).ok()?.try_into().ok()?;
+    let hash = hex::encode(Sha256::digest(bytes));
+    payment_hash?
+        .eq_ignore_ascii_case(&hash)
+        .then_some(preimage)
 }
 
 fn terms_digest(exchange_id: &str, terms: &AdmissionTerms) -> Option<String> {
