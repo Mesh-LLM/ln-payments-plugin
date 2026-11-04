@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-pay-lightning"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-payments"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-payments-types"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "httparse",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-wallet"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
