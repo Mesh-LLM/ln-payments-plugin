@@ -40,7 +40,61 @@ fn payment(status: PaymentStatus) -> Transaction {
         status_msg: None,
         created_at_ms: 0,
         settled_at_ms: Some(1),
+        preimage: None,
     }
+}
+
+/// A preimage and the payment hash it proves.
+const PREIMAGE: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+
+fn preimage_hash() -> String {
+    hex::encode(Sha256::digest([1u8; 32]))
+}
+
+#[test]
+fn a_settlement_carries_only_a_preimage_that_proves_its_payment() {
+    let exchange = Exchange::new(Role::Payer, "exchange-proof", &terms()).unwrap();
+    let mut paid = payment(PaymentStatus::Succeeded);
+    paid.payment_hash = Some(preimage_hash());
+    paid.preimage = Some(PREIMAGE.to_ascii_uppercase());
+    let event = exchange.settled(0, &paid).unwrap();
+    assert_eq!(event.preimage.as_deref(), Some(PREIMAGE), "lowercased");
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["preimage"], PREIMAGE);
+    let mut blank = json.clone();
+    blank["event_ref"] = json!("");
+    assert_eq!(
+        digest(&blank).unwrap(),
+        event.event_ref,
+        "event_ref covers it"
+    );
+    assert!(!format!("{event:?}").contains(PREIMAGE), "Debug redacts it");
+
+    for wrong in ["02".repeat(32), "01".repeat(31), "not hex".into()] {
+        paid.preimage = Some(wrong);
+        let event = exchange.settled(0, &paid).unwrap();
+        assert_eq!(event.preimage, None);
+        assert!(!serde_json::to_string(&event).unwrap().contains("preimage"));
+    }
+    paid.preimage = Some(PREIMAGE.into());
+    paid.payment_hash = None;
+    assert_eq!(exchange.settled(0, &paid).unwrap().preimage, None);
+    paid.payment_hash = Some(preimage_hash());
+    paid.status = PaymentStatus::Failed;
+    assert!(exchange.settled(0, &paid).is_none());
+
+    let provider = Exchange::new(Role::Provider, "provider-proof", &terms()).unwrap();
+    let mut proven = invoice(1000);
+    proven.payment_hash = preimage_hash();
+    let settled = SettledReceived {
+        preimage: Some(PREIMAGE.into()),
+        ..SettledReceived::default()
+    };
+    let event = provider.received(0, &proven, &settled).unwrap();
+    assert_eq!(event.preimage.as_deref(), Some(PREIMAGE));
+    // The invoice's hash is what it must prove, not the settlement's.
+    let event = provider.received(0, &invoice(1000), &settled).unwrap();
+    assert_eq!(event.preimage, None);
 }
 
 /// capsules-plugin's `event_ref_matches_an_independent_digest` vector: an
@@ -83,6 +137,8 @@ fn event_contract_is_private_stable_and_self_checking() {
     let json = serde_json::to_value(&first).unwrap();
     let text = json.to_string();
     assert!(text.contains(r#""role":"payer""#));
+    // Only a settlement event may carry a preimage (see
+    // `a_settlement_carries_only_a_preimage_that_proves_its_payment`).
     for secret in ["private-recovery", "preimage", "bolt11", "lnbc", "prompt"] {
         assert!(!text.contains(secret), "{secret} leaked");
     }
@@ -152,6 +208,7 @@ fn a_settlement_the_wallet_did_not_describe_has_exactly_the_original_members() {
             &SettledReceived {
                 credited_msat: Some(995),
                 fee_msat: Some(5),
+                preimage: None,
             },
         )
         .unwrap();
