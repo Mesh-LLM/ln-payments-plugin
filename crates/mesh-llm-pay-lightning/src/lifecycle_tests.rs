@@ -86,6 +86,7 @@ fn event_contract_is_private_stable_and_self_checking() {
     for secret in ["private-recovery", "preimage", "bolt11", "lnbc", "prompt"] {
         assert!(!text.contains(secret), "{secret} leaked");
     }
+    assert!(text.contains(r#""input_msat_per_million":1000"#));
     let mut blank = json.clone();
     blank["event_ref"] = json!("");
     assert_eq!(digest(&blank).unwrap(), first.event_ref);
@@ -202,4 +203,47 @@ async fn nothing_is_emitted_before_dispatch_or_without_a_publisher() {
     lifecycle.abandoned("private-recovery");
     lifecycle.payer_settled("private-recovery", None, None, 1);
     assert!(events.try_recv().is_err(), "abandoned closes observation");
+}
+
+/// The accepted terms' rates ride on `terms_accepted` and on no other phase;
+/// the event still digests over them. Only the payer emits `terms_accepted`
+/// in production; the provider role is checked here at unit level.
+#[test]
+fn terms_accepted_carries_the_rates_and_no_other_phase_does() {
+    for role in [Role::Payer, Role::Provider] {
+        let exchange = Exchange::new(role, "priced", &terms()).unwrap();
+        let accepted = serde_json::to_value(exchange.accepted(100).unwrap()).unwrap();
+        assert_eq!(accepted["model"], "model");
+        assert_eq!(accepted["input_msat_per_million"], 1000);
+        assert_eq!(accepted["output_msat_per_million"], 2000);
+        assert!(accepted.get("cache_discount_percent").is_none());
+        let mut blank = accepted.clone();
+        blank["event_ref"] = json!("");
+        assert_eq!(digest(&blank).unwrap(), accepted["event_ref"]);
+
+        for other in [
+            exchange.invoice(0, &invoice(3)).unwrap(),
+            exchange.final_amount(7).unwrap(),
+            exchange.delivered(5).unwrap(),
+        ] {
+            let other = serde_json::to_value(other).unwrap();
+            for key in [
+                "model",
+                "input_msat_per_million",
+                "output_msat_per_million",
+                "cache_discount_percent",
+            ] {
+                assert!(other.get(key).is_none(), "{key} on {}", other["phase"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_cache_discount_is_stated_only_when_the_seller_gives_one() {
+    let mut discounted = terms();
+    discounted.pricing.cache_discount_percent = 25;
+    let exchange = Exchange::new(Role::Payer, "discounted", &discounted).unwrap();
+    let accepted = serde_json::to_value(exchange.accepted(100).unwrap()).unwrap();
+    assert_eq!(accepted["cache_discount_percent"], 25);
 }
