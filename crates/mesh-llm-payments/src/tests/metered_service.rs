@@ -811,3 +811,20 @@ async fn an_admitted_request_keeps_its_minimum_payment_through_settlement() {
     assert_eq!(bill.remaining_msat, 1500);
     assert_eq!(bill.invoice.unwrap().amount_msat, Some(1500));
 }
+
+#[tokio::test]
+async fn buyer_reconnect_does_not_lookup_unpaid_seller_deposits() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    for i in 0..16 {
+        service
+            .serve_admit(admit(&format!("unpaid-{i}"), "peer"))
+            .await?;
+    }
+    let before = wallet.lookups.load(Ordering::SeqCst);
+    service.reconcile_buyer().await?;
+    assert_eq!(wallet.lookups.load(Ordering::SeqCst), before);
+    assert_eq!(service.ledger.unpaid_metered_invoices()?.len(), 16);
+    Ok(())
+}

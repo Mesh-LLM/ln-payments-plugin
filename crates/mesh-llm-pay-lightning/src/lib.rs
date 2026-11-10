@@ -263,6 +263,15 @@ impl Engine {
                     .request_terms(&id)?
                     .context("unknown buyer admission")?;
                 ensure!(terms.peer == peer, "abandonment from wrong seller");
+                self.service
+                    .settle_final(SettleFinalRequest {
+                        request_id: id.clone(),
+                        usage: None,
+                        bill_msat: None,
+                        deposit_applied_msat: 0,
+                        invoice: None,
+                    })
+                    .await?;
                 self.service.finish_metered(&id).await?;
                 self.lifecycle.abandoned(&id);
                 Ok(vec![Message::Quote])
@@ -470,7 +479,7 @@ impl Engine {
         self.requote.lock().unwrap().remove(peer);
         let mut messages = Vec::new();
         // Observe uncertain payments before asking the authenticated seller for stored outcomes.
-        for terms in self.service.reconcile().await?.approved {
+        for terms in self.service.reconcile_buyer().await?.approved {
             if terms.peer == peer {
                 messages.push(Message::Recover { id: terms.id });
             }

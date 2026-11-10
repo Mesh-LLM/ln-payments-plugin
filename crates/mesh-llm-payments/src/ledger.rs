@@ -209,6 +209,28 @@ impl Ledger {
         Ok(())
     }
 
+    /// Atomically retain the first validated buyer outcome, including zero-charge outcomes.
+    pub(crate) fn pin_buyer_settlement(
+        &self,
+        request: &mesh_llm_payments_types::contract::SettleFinalRequest,
+    ) -> Result<()> {
+        let key = format!("metered-settlement/{}", request.request_id);
+        let value = serde_json::to_string(request)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO settings(key,value) VALUES (?1,?2) ON CONFLICT(key) DO NOTHING",
+            params![key, value],
+        )?;
+        let saved: String =
+            transaction.query_row("SELECT value FROM settings WHERE key=?", [&key], |row| {
+                row.get(0)
+            })?;
+        ensure!(saved == value, "seller changed the final settlement");
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn set_pricing(&self, model: &str, pricing: Option<&Pricing>) -> Result<()> {
         ensure!(
             !model.is_empty() && model.len() <= 1024,

@@ -73,6 +73,7 @@ impl PaymentService {
     /// invoice. An abandoned settlement (no usage) creates no charge, and a
     /// bill the deposit covered needs no invoice.
     pub async fn settle_final(&self, request: SettleFinalRequest) -> Result<SettleFinalResponse> {
+        let outcome = request.clone();
         let SettleFinalRequest {
             request_id,
             usage,
@@ -88,6 +89,7 @@ impl PaymentService {
                 bill_msat.is_none() && invoice.is_none() && deposit_applied_msat == 0,
                 "abandoned request cannot create a charge"
             );
+            self.ledger.pin_buyer_settlement(&outcome)?;
             return Ok(SettleFinalResponse::default());
         };
         let bill = usage.bill_msat(&admission.pricing)?;
@@ -104,6 +106,20 @@ impl PaymentService {
         );
         // Exact remainder; every positive sub-sat remainder is raised to 1 sat.
         let remaining = final_invoice_msat(bill, deposit_applied_msat, admission.min_payment_msat);
+        if let Some(invoice) = &invoice {
+            ensure!(remaining > 0, "final invoice for a covered bill");
+            ensure!(
+                invoice.amount_msat == Some(remaining),
+                "invoice amount does not match the admission"
+            );
+            ensure!(
+                *invoice == Invoice::parse(&invoice.bolt11)?,
+                "invoice metadata mismatch"
+            );
+        } else {
+            ensure!(remaining == 0, "final invoice missing");
+        }
+        self.ledger.pin_buyer_settlement(&outcome)?;
         let payment = match invoice {
             Some(invoice) => {
                 ensure!(remaining > 0, "final invoice for a covered bill");

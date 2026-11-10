@@ -7,10 +7,18 @@ branch `jimmy/lightning-wallet-library`). mesh-llm keeps only the generic
 seams — operation bindings, OpenAI-exchange hooks and the generic
 `mesh-llm plugins call` — and links none of these crates.
 
-**Work in progress.** Not released, not in the plugin catalog, no compatibility
-with the built-in payment path in released mesh-llm. A zero-config paid
-baseline has been proven live once (see [Status](#status-2026-10-29)); that is a
-baseline, not a readiness claim.
+**Experimental; do not use with funds you cannot afford to lose.** Binary
+releases are published on [GitHub Releases](https://github.com/Mesh-LLM/ln-payments-plugin/releases)
+(v0.1.2 as of 2026-11-10). Publication is not a production-readiness claim.
+This plugin is not in the plugin catalog and is not compatible with the old
+built-in payment path. The historical zero-config baseline below is evidence
+of that specific run, not a security or readiness sign-off.
+
+Buyer settlement now durably pins the first accepted final outcome, including
+abandoned and deposit-covered outcomes; recovery rejects changed outcomes.
+Peer reconnect reconciles outgoing buyer payments without sweeping every unpaid
+seller invoice. Seller receipts remain observed independently by the paced
+receipt worker; unpaid debts are not discarded.
 
 | crate | owns |
 |---|---|
@@ -20,8 +28,7 @@ baseline, not a readiness claim.
 | `mesh-llm-pay-lightning` | the plugin binary (`pay-lightning`) — [crate README](crates/mesh-llm-pay-lightning/README.md) |
 
 mesh-llm SDK crates (`mesh-llm-plugin`, `mesh-llm-events`,
-`mesh-llm-plugin-manager`) are git dependencies pinned to #2654 commit
-`cd9edd70c`. Wallet plugins (`Mesh-LLM/lexe-wallet`, nwc, ldk) are separate
+`mesh-llm-plugin-manager`) are git dependencies pinned to commit `8d03dea45`. Wallet plugins (`Mesh-LLM/lexe-wallet`, nwc, ldk) are separate
 repositories and are unchanged.
 
 ## How it works
@@ -135,6 +142,6 @@ Known gaps, none of them signed off:
   install-time preset; it is not a runtime dependency. With no wallet bound,
   `pay-lightning` reports not-ready in `mesh-llm plugins list` and the node
   does not install or start anything on its behalf.
-- mesh-llm #2654 still carries copies of these four crates in its workspace;
-  removing them and updating `mesh/docs/specs/lightning-payments.md` (still the
-  built-in protocol text) are pending on that PR.
+- The extraction PR [mesh-llm #2654](https://github.com/Mesh-LLM/mesh-llm/pull/2654)
+  has merged; these engine implementations now live here, not in the host.
+  Historical host-protocol descriptions are not the installed plugin contract.
