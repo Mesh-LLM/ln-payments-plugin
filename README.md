@@ -1,4 +1,4 @@
-# ln-payments-plugin — WIP, do not use
+# ln-payments-plugin
 
 Lightning payments for mesh-llm as an installable plugin, `pay-lightning`, plus
 the payment-engine crates it is built from. Moved out of `Mesh-LLM/mesh-llm`
@@ -7,18 +7,10 @@ branch `jimmy/lightning-wallet-library`). mesh-llm keeps only the generic
 seams — operation bindings, OpenAI-exchange hooks and the generic
 `mesh-llm plugins call` — and links none of these crates.
 
-**Experimental; do not use with funds you cannot afford to lose.** Binary
+**Early access; use it's own wallet funds ideally.** Binary
 releases are published on [GitHub Releases](https://github.com/Mesh-LLM/ln-payments-plugin/releases)
-(v0.1.2 as of 2026-11-10). Publication is not a production-readiness claim.
-This plugin is not in the plugin catalog and is not compatible with the old
-built-in payment path. The historical zero-config baseline below is evidence
-of that specific run, not a security or readiness sign-off.
+(v0.1.2 as of 2026-11-10).
 
-Buyer settlement now durably pins the first accepted final outcome, including
-abandoned and deposit-covered outcomes; recovery rejects changed outcomes.
-Peer reconnect reconciles outgoing buyer payments without sweeping every unpaid
-seller invoice. Seller receipts remain observed independently by the paced
-receipt worker; unpaid debts are not discarded.
 
 | crate | owns |
 |---|---|
