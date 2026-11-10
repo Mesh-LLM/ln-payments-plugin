@@ -4,8 +4,8 @@ Lightning payments for mesh-llm. The `pay-lightning` plugin handles model
 pricing, spending policy, deposits and settlement. A separate wallet plugin
 handles Lightning payments.
 
-**Early access.** Use your own wallet and funds, preferably a dedicated wallet
-with a small balance.
+Micropayments in mesh-llm are in developer preview—use with caution and small
+amounts only. Use your own wallet and funds.
 
 Binary packages are available on
 [GitHub Releases](https://github.com/Mesh-LLM/ln-payments-plugin/releases).
