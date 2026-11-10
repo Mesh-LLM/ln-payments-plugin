@@ -927,6 +927,15 @@ the fee the receiving wallet deducted) and, on the provider side,
 `credited_msat` (what the receiving wallet reports it credited; Lexe reports
 it net of the fee). Both are omitted when the wallet or the `payments.v1`
 provider did not report them, and both are covered by `event_ref`.
+The payer's `terms_accepted` event also states the accepted terms' price:
+`model`, `input_msat_per_million`, `output_msat_per_million` and, only when the
+seller gives one, `cache_discount_percent`. These are the public terms that
+`terms_digest` already commits to; no other phase carries them. The host's
+`backend_selected` event carries no price (the node is payment-agnostic), so
+this is where a plugin on the node reads what the selected seller charges. A
+`buy_prices` entry for the model, when configured, bounds these rates before
+the terms are accepted; otherwise only the spending policy's budget does.
+
 Terms acceptance is `payer_asserted` (amount retains the legacy local
 `max_total_msat` metadata; it is not an enforced request spending cap);
 invoice issuance is `provider_asserted` as observed by the payer, not

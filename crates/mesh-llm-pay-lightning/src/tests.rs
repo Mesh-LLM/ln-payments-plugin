@@ -1115,6 +1115,20 @@ async fn both_sides_publish_lifecycle_events_joined_on_their_exchange() {
             .all(|e| e.exchange_id == "buyer-exchange" && e.role == crate::lifecycle::Role::Payer)
     );
     assert_eq!(buyer[5].amount_msat, 3000);
+    // The negotiated seller's price rides on terms_accepted, and only there.
+    let seller_price = price();
+    assert_eq!(buyer[0].model.as_deref(), Some("model"));
+    assert_eq!(
+        buyer[0].input_msat_per_million,
+        Some(seller_price.input_msat_per_million)
+    );
+    assert_eq!(
+        buyer[0].output_msat_per_million,
+        Some(seller_price.output_msat_per_million)
+    );
+    assert!(buyer[1..].iter().all(|e| e.model.is_none()
+        && e.input_msat_per_million.is_none()
+        && e.output_msat_per_million.is_none()));
     let seller = drain(&mut seller_events);
     let phases: Vec<_> = seller.iter().map(|e| e.phase).collect();
     assert_eq!(
