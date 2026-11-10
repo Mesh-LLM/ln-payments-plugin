@@ -1225,3 +1225,58 @@ async fn ready_ticket_is_not_claimed_once_policy_stops_buying() {
         Some(402)
     );
 }
+
+#[tokio::test]
+async fn reconnect_is_not_held_by_a_wedged_seller_receipt_lookup() {
+    let f = Fixture::new();
+    f.buyer
+        .service
+        .ledger
+        .set_pricing("model", Some(&price()))
+        .unwrap();
+    let admitted = f
+        .buyer
+        .service
+        .serve_admit(ServeAdmitRequest {
+            billing_revision: BillingRevision::V3,
+            request_id: "unpaid".into(),
+            buyer: "stranger".into(),
+            model: "model".into(),
+            pricing: price(),
+        })
+        .await
+        .unwrap();
+    let ServeAdmitResponse::Deposit { invoice, .. } = admitted else {
+        panic!("not a deposit")
+    };
+    *f.network.slow_lookup.lock().unwrap() = Some(invoice.payment_hash);
+    let opening =
+        tokio::time::timeout(std::time::Duration::from_secs(2), f.buyer.peer_up("seller"))
+            .await
+            .expect("reconnect waited on a seller receipt lookup")
+            .unwrap();
+    assert!(matches!(opening[0], Message::Hello { .. }));
+}
+
+#[tokio::test]
+async fn abandonment_cannot_replace_an_accepted_bill() {
+    let f = Fixture::new();
+    let id = f.prepare().await;
+    f.seller.gate(&gate("x", "buyer")).unwrap();
+    let (_, settlement) = f
+        .seller
+        .terminal(&terminal(
+            "x",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    f.buyer.channel("seller", settlement).await.unwrap();
+    assert!(
+        f.buyer
+            .channel("seller", Message::Abandoned { id })
+            .await
+            .is_err()
+    );
+}

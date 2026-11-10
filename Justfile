@@ -1,4 +1,4 @@
-# ln-payments-plugin — WIP, do not use. `just test` is serial: the suite is flaky in parallel.
+# ln-payments-plugin — developer preview; use caution and small amounts. `just test` is serial: the suite is flaky in parallel.
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 target := `rustc -vV | sed -n 's/^host: //p'`
