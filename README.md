@@ -1,140 +1,100 @@
-# ln-payments-plugin — WIP, do not use
+# ln-payments-plugin
 
-Lightning payments for mesh-llm as an installable plugin, `pay-lightning`, plus
-the payment-engine crates it is built from. Moved out of `Mesh-LLM/mesh-llm`
-(`mesh/crates/`, PR [#2654](https://github.com/Mesh-LLM/mesh-llm/pull/2654),
-branch `jimmy/lightning-wallet-library`). mesh-llm keeps only the generic
-seams — operation bindings, OpenAI-exchange hooks and the generic
-`mesh-llm plugins call` — and links none of these crates.
+Lightning payments for mesh-llm. The `pay-lightning` plugin handles model
+pricing, spending policy, deposits and settlement. A separate wallet plugin
+handles Lightning payments.
 
-**Work in progress.** Not released, not in the plugin catalog, no compatibility
-with the built-in payment path in released mesh-llm. A zero-config paid
-baseline has been proven live once (see [Status](#status-2026-10-29)); that is a
-baseline, not a readiness claim.
+Micropayments in mesh-llm are in developer preview—use with caution and small
+amounts only. Use your own wallet and funds.
 
-| crate | owns |
-|---|---|
-| `mesh-llm-wallet` | the `wallet.v1` contract and `plugin-server` used by wallet plugins |
-| `mesh-llm-payments-types` | wire + ledger types (`pay.ln.v1`) |
-| `mesh-llm-payments` | ledger, pricing/policy, metered credit, settlement |
-| `mesh-llm-pay-lightning` | the plugin binary (`pay-lightning`) — [crate README](crates/mesh-llm-pay-lightning/README.md) |
+Binary packages are available on
+[GitHub Releases](https://github.com/Mesh-LLM/ln-payments-plugin/releases).
+Both buyer and seller need `pay-lightning` and a compatible wallet plugin.
 
-mesh-llm SDK crates (`mesh-llm-plugin`, `mesh-llm-events`,
-`mesh-llm-plugin-manager`) are git dependencies pinned to #2654 commit
-`cd9edd70c`. Wallet plugins (`Mesh-LLM/lexe-wallet`, nwc, ldk) are separate
-repositories and are unchanged.
+## Install
 
-## How it works
+Requires mesh-llm with plugin payment support (`b63cea23c` or later;
+v0.78.0 and earlier are not supported).
 
-- **Install is the consent.** The package manifest declares one `wallet.v1`
-  capability binding named `wallet`, the OpenAI-exchange hook
-  (`request_received`, `backend_selected`, `exchange_finished`, the
-  `x-plugin-…-pay-terms` response header) and peer-block permission.
-  `mesh-llm plugins install` prints those grants and applies them; no
-  `[[plugin]]` stanza is needed. A `[[plugin]]` entry can still override any of
-  it (see the crate README).
-- **The wallet is reached through the host, never linked.** On first use the
-  host resolves the `wallet.v1` binding to the single running wallet plugin and
-  pins it; every wallet call (`wallet_balance`, `wallet_create_invoice`,
-  `wallet_pay`, …) is a `plugin/bound_operation` RPC with a host-minted handle.
-  One binding owns one provider; two running wallet plugins are refused until
-  the operator names one.
-- **Seller.** A `set_pricing` control command (see **Control** below) prices
-  a model. A request for a priced model
-  without a valid ticket is answered `402 Payment Required` with the pay-terms
-  header; a buyer that negotiates over `pay.ln.v1` pays a deposit, inference
-  runs, and the final bill is settled from the backend-reported usage.
-- **Buyer.** Spends under the ledger policy only — a `policy` control
-  command with `mode: automatic` and a `daily_budget_msat` — the same rule
-  built-in payments used; the handshake starts when a request selects
-  that seller. The default policy is `free_only`, so a fresh install buys
-  nothing and gets the 402.
-- **State** lives in `~/.mesh-llm/payments/`: `payment.json` (created with
-  non-spending defaults), the ledger, `wallet-provider.json` and
-  `wallets/<wallet plugin>/` — the layout built-in payments used, so an
-  existing wallet is found again.
-- **Control.** mesh-llm has no `wallet` command. Everything goes through the
-  plugin's published `control` operation via the generic
-  `mesh-llm plugins call pay-lightning control --input '<json>'` (node API
-  port, `--port`, default 3131). The input is a `ControlCommand`
-  (`crates/mesh-llm-payments-types/src/control.rs`), tagged by `"command"` in
-  snake_case: `balance`, `transactions`, `fund`, `send`, `pending`, `policy`,
-  `pricing`, `set_pricing`, `min_payment`, `admission_deposit`, `blocked`,
-  `unblock`, `unpin`, …
-
-## Build, package, install
-
-Needs mesh-llm `main` at `b63cea23c` (#2654) or later, or the first mesh-llm
-release after it; v0.78.0 and earlier have none of the seams. Install straight
-from the repo; CI installs the release this way through mesh-llm's real
-installer on Linux, macOS and Windows.
+Install `pay-lightning` with **one** wallet provider:
 
 ```sh
-just check                # fmt + clippy
-just test                 # serial; the suite is flaky in parallel
-just package              # dist/pay-lightning-v<version>-<target>.tar.gz
-
-# pick one wallet plugin and install it together with pay-lightning
 mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin Mesh-LLM/ln-payments-plugin
+# Alternatively:
 mesh-llm plugins install Mesh-LLM/nwc-wallet-plugin Mesh-LLM/ln-payments-plugin
-
-# or from a local build:
-mesh-llm plugins install --archive dist/pay-lightning-v0.1.2-<target>.tar.gz \
-    --name pay-lightning --version 0.1.2
 ```
 
-Install **both** plugins, in either order, before starting the node. The host
-resolves `pay-lightning`'s `wallet.v1` binding to a running wallet plugin; it
-does not install one, and installing a wallet does not install `pay-lightning`.
-Without a wallet plugin `pay-lightning` starts but every wallet call is refused
-(`no running plugin serves wallet.v1`).
+Install both plugins before starting the node. The host connects `pay-lightning`
+to the running wallet provider. Without a wallet provider, payment operations
+are unavailable. If multiple wallet providers are running, select one explicitly
+in the [plugin configuration](crates/mesh-llm-pay-lightning/README.md#explicit-operator-binding-optional).
 
-Then on the seller, start `mesh-llm --model <model>` and price the model:
+## Sell inference
+
+Start `mesh-llm --model <model>`, then set the model's prices in millisatoshis
+per million tokens:
 
 ```sh
 mesh-llm plugins call pay-lightning control --input \
   '{"command":"set_pricing","model":"<model>","value":{"input_msat_per_million":1000,"output_msat_per_million":1000}}'
 ```
 
-On the buyer, start `mesh-llm client --join <token>` and allow spending:
+Buyers pay a deposit before inference. The final bill uses backend-reported
+usage. Requests without a valid payment ticket receive `402 Payment Required`.
+
+## Buy inference
+
+Start `mesh-llm client --join <token>`, then enable spending with a daily budget
+in millisatoshis:
 
 ```sh
 mesh-llm plugins call pay-lightning control --input \
   '{"command":"policy","value":{"mode":"automatic","daily_budget_msat":600000}}'
 ```
 
-Add `--port <api port>` if the node API is not on 3131. Nothing else is
-written by hand.
+The default policy is `free_only`: a fresh install does not authorize spending.
+The daily budget is not a per-request limit.
 
-## Status (2026-10-29)
+## Wallet and state
 
-Proven at mesh-llm `eba2a8ecf` + this repo `bf8aee0`, two fresh `$HOME`s on
-one machine, `lexe-wallet` v0.1.0 as released, zero config; evidence
-independently re-derived by a second reviewer:
+Control commands use the running node's API (default port 3131). Add
+`--port <api port>` when using a different port.
 
-- **Paid:** 5×`200`; five new buyer payments of 1,000 msat and five new seller
-  receipts of 995 msat with the same payment hashes, all inside the request
-  window (before/after transaction lists on both wallets).
-- **Refused:** buyer left at `free_only` → 5×`402` carrying the pay-terms
-  header, zero new transactions on either wallet.
-- `just test`: 47 unit + 4 integration tests.
+```sh
+mesh-llm plugins call pay-lightning control --input '{"command":"balance"}'
+mesh-llm plugins call pay-lightning control --input '{"command":"transactions","limit":20}'
+```
 
-Known gaps, none of them signed off:
+Other commands include `fund`, `send`, `pending`, `policy`, `pricing`,
+`set_pricing`, `min_payment`, `admission_deposit`, `blocked` and `unblock`.
+See [ControlCommand](crates/mesh-llm-payments-types/src/control.rs) for inputs.
 
-- The `unpin` control command is unsupported in the plugin shape (it needs a
-  stopped-node path the plugin does not have).
-- The seller's brand-new Lexe wallet reported `spendable_msat: 0` after five
-  settled inbound payments — unresolved, not attributed.
-- The test suite is flaky in parallel; `just test` runs it serially.
-- Not in the plugin catalog (not needed); `pay-lightning` is both the installed plugin name
-  and the protocol slot — naming is under review.
-- Install UX: install `pay-lightning` and a wallet plugin by hand for now.
-  Neither plugin names the other: `pay-lightning` asks for an opaque wallet
-  capability, the operator binds it to a provider, and a wallet only provides
-  that capability. A later catalog *bundle* may install the pair together as an
-  install-time preset; it is not a runtime dependency. With no wallet bound,
-  `pay-lightning` reports not-ready in `mesh-llm plugins list` and the node
-  does not install or start anything on its behalf.
-- mesh-llm #2654 still carries copies of these four crates in its workspace;
-  removing them and updating `mesh/docs/specs/lightning-payments.md` (still the
-  built-in protocol text) are pending on that PR.
+State is stored under `~/.mesh-llm/payments/` by default, including configuration,
+the ledger, wallet identity and wallet-provider data. Do not replace funded
+wallet state to change the pinned wallet identity. The `unpin` command is not
+supported by the plugin.
+
+## Development
+
+```sh
+just check                # formatting and Clippy
+just test                 # full workspace tests, run serially
+just package              # release binary and installable archive in dist/
+```
+
+To install a local package:
+
+```sh
+mesh-llm plugins install --archive dist/pay-lightning-v0.1.2-<target>.tar.gz \
+    --name pay-lightning --version 0.1.2
+```
+
+| Crate | Purpose |
+|---|---|
+| `mesh-llm-wallet` | Wallet contract and plugin server |
+| `mesh-llm-payments-types` | Payment protocol and ledger types |
+| `mesh-llm-payments` | Ledger, pricing, policy and settlement |
+| `mesh-llm-pay-lightning` | Plugin executable |
+
+See the [plugin reference](crates/mesh-llm-pay-lightning/README.md) for explicit
+wallet bindings, configuration and settlement behavior.

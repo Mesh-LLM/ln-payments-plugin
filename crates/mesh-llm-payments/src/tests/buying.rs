@@ -854,3 +854,85 @@ async fn a_buyer_pays_a_seller_deposit_up_to_its_own_and_refuses_a_higher_one() 
     assert_eq!(settled.payment.unwrap().amount_msat, 1000);
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn invoice_free_final_outcomes_survive_restart_and_reject_replacement() -> Result<()> {
+    for abandoned in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let (wallet, service) = open(dir.path());
+        service
+            .accept_admission(AcceptAdmissionRequest {
+                billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+                terms: local("pinned", 50_000),
+                admission: admission("pinned", 1000),
+            })
+            .await?;
+        service
+            .pay_deposit(PayDepositRequest {
+                request_id: "pinned".into(),
+                invoice: invoice(91, 1000),
+            })
+            .await?;
+        let first = if abandoned {
+            settlement("pinned", None, None, 0, None)
+        } else {
+            settlement("pinned", Some((50, 50)), Some(1000), 1000, None)
+        };
+        service.settle_final(first.clone()).await?;
+        drop(service);
+        let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+        service.settle_final(first).await?;
+        assert!(
+            service
+                .settle_final(settlement(
+                    "pinned",
+                    Some((100, 100)),
+                    Some(2000),
+                    1000,
+                    Some(invoice(92, 1000)),
+                ))
+                .await
+                .is_err()
+        );
+        assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conflicting_concurrent_outcomes_have_one_durable_winner() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (_, service) = open(dir.path());
+    service
+        .accept_admission(AcceptAdmissionRequest {
+            billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
+            terms: local("race", 50_000),
+            admission: admission("race", 1000),
+        })
+        .await?;
+    let service = Arc::new(service);
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let mut tasks = Vec::new();
+    for count in [10, 20] {
+        let service = service.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            service
+                .settle_final(settlement(
+                    "race",
+                    Some((count, count)),
+                    Some(count * 20),
+                    count * 20,
+                    None,
+                ))
+                .await
+        }));
+    }
+    let mut accepted = 0;
+    for task in tasks {
+        accepted += usize::from(task.await?.is_ok());
+    }
+    assert_eq!(accepted, 1);
+    Ok(())
+}

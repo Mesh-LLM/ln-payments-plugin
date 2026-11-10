@@ -40,6 +40,17 @@ impl PaymentService {
     pub async fn reconcile(&self) -> Result<ReconcileResponse> {
         let _ = self.reconcile_pending().await;
         let _ = self.metered_refresh_all().await;
+        self.approved_recoveries()
+    }
+
+    /// Reconnect must not scan every seller receipt before recovering buyer work.
+    /// Seller receipts are independently observed by the plugin's paced worker.
+    pub async fn reconcile_buyer(&self) -> Result<ReconcileResponse> {
+        let _ = self.reconcile_pending().await;
+        self.approved_recoveries()
+    }
+
+    fn approved_recoveries(&self) -> Result<ReconcileResponse> {
         let approved = self
             .ledger
             .requests()?
