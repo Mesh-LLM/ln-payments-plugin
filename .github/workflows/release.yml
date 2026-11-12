@@ -29,6 +29,7 @@ jobs:
           - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, ext: tar.gz }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: tar.gz }
           - { os: windows-2022, target: x86_64-pc-windows-msvc, exe: .exe, ext: zip }
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, exe: .exe, ext: zip }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
@@ -52,6 +53,8 @@ jobs:
         run: |
           just check
           just test
+      - name: Test release build
+        run: cargo test --release --locked
       - name: Package
         run: |
           just package
