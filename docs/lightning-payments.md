@@ -133,6 +133,15 @@ still settle and is never paid twice, and a ready or consumed ticket is never
 dropped. Without this, a single failed cold deposit left the seller quoting the
 same dead invoice until restart.
 
+Prepared tickets are per model. The buyer's `Hello` names the models it wants
+(its configured buying ceilings plus the model of the request that selected
+the seller), and the seller quotes a deposit only for those models, then
+refills only the model a request consumed. A seller that prices a model it does
+not serve therefore costs a payer nothing. A buyer whose `Hello` names no model
+(an older plugin) is quoted every priced model, so it still pays a deposit per
+priced model until it upgrades. A peer pre-warm that selects no model sends
+`Hello` without `Quote`.
+
 `Recover { id }` lets a payer refetch the settlement of a request after a
 disconnect or restart. It never re-dispatches: a request still in progress is
 answered `Pending`, an abandoned one with a null-usage `Settlement` and

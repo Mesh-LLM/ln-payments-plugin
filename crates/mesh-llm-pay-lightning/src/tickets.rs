@@ -54,6 +54,15 @@ impl Tickets {
             )
             .optional()?)
     }
+    /// The model a ticket was quoted for.
+    pub fn model(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .query_row("SELECT model FROM tickets WHERE id=?1", [id], |r| r.get(0))
+            .optional()?)
+    }
     pub fn consumed(&self, id: &str, peer: &str) -> Result<bool> {
         Ok(self.0.lock().unwrap().query_row(
             "SELECT EXISTS(SELECT 1 FROM tickets WHERE id=?1 AND peer=?2 AND exchange IS NOT NULL)",

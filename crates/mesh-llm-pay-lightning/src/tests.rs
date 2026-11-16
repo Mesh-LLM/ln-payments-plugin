@@ -1280,3 +1280,150 @@ async fn abandonment_cannot_replace_an_accepted_bill() {
             .is_err()
     );
 }
+
+fn admission_models(messages: &[Message]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Admission { terms, .. } => Some(terms.model.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The seller prices a model it never serves; a buyer that names the model it
+/// requests must be quoted, and pay a deposit for, that model only.
+#[tokio::test]
+async fn buyer_naming_its_model_is_quoted_only_that_model() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("unserved", Some(&price()))
+        .unwrap();
+    let opening = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    assert!(matches!(
+        &opening[..],
+        [Message::Hello { models, .. }, Message::Quote] if models == &["model".to_string()]
+    ));
+    let mut quoted = vec![];
+    for message in opening {
+        quoted.extend(f.seller.channel("buyer", message).await.unwrap());
+    }
+    assert_eq!(admission_models(&quoted), ["model"]);
+    for admission in quoted {
+        f.buyer.channel("seller", admission).await.unwrap();
+    }
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1, "one deposit");
+}
+
+/// A first request for a second model on a live connection asks for it.
+#[tokio::test]
+async fn first_request_for_another_model_on_a_live_connection_asks_for_it() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    assert!(
+        f.buyer
+            .peer_up_for("seller", Some("model"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let more = f.buyer.peer_up_for("seller", Some("other")).await.unwrap();
+    assert!(matches!(
+        &more[..],
+        [Message::Hello { models, .. }, Message::Quote] if models.contains(&"other".to_string())
+    ));
+}
+
+/// A peer pre-warm names no model, so it must not ask for every priced model.
+#[tokio::test]
+async fn model_less_pre_warm_sends_hello_without_quote() {
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    let opening = f.buyer.peer_up("seller").await.unwrap();
+    assert!(matches!(&opening[..], [Message::Hello { models, .. }] if models.is_empty()));
+}
+
+/// Older buyers send an empty Hello and still get every priced model quoted
+/// (and so still overpay for a model the seller does not serve).
+#[tokio::test]
+async fn empty_hello_buyer_is_still_quoted_every_priced_model() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("unserved", Some(&price()))
+        .unwrap();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model", "unserved"]);
+}
+
+/// Refills after use and after a billed settlement re-quote only the model
+/// that was consumed, even when the buyer named several.
+#[tokio::test]
+async fn replenish_requotes_only_the_consumed_model() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec!["model".into(), "other".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model", "other"]);
+    let mut paid = vec![];
+    for admission in quoted {
+        paid.push(
+            f.buyer
+                .channel("seller", admission)
+                .await
+                .unwrap()
+                .remove(0),
+        );
+    }
+    for paid in paid {
+        f.seller.channel("buyer", paid).await.unwrap();
+    }
+    let used = gate("seed", "buyer");
+    assert_eq!(f.seller.gate(&used).unwrap().decision, Decision::Allow);
+    let (_, refill) = f.seller.replenish(&used).await.unwrap().unwrap();
+    assert_eq!(admission_models(&refill), ["model"]);
+    // The refill is paid, then the first request is billed and settled.
+    let (_, bill) = f
+        .seller
+        .terminal(&terminal(
+            "seed",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let paid = f.buyer.channel("seller", bill).await.unwrap().remove(0);
+    let after = f.seller.channel("buyer", paid).await.unwrap();
+    assert_eq!(admission_models(&after), ["model"]);
+}

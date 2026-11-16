@@ -40,6 +40,8 @@ use std::{
 };
 
 pub const CHANNEL: &str = "pay.ln.v1";
+/// Bound on peers whose wanted-model sets are remembered in memory.
+const WANTED_PEERS: usize = 1024;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Message {
@@ -101,6 +103,11 @@ pub struct Engine {
     ready_seen: std::sync::Mutex<BTreeSet<String>>,
     /// Sellers whose last deposit failed; the next selected request quotes again.
     requote: std::sync::Mutex<BTreeSet<String>>,
+    /// Seller: the models each buyer named in its Hello. A buyer that named
+    /// none gets a ticket for every priced model, as older buyers expect.
+    wanted: std::sync::Mutex<BTreeMap<String, BTreeSet<String>>>,
+    /// Buyer: the models this node asked each seller to quote.
+    asked: std::sync::Mutex<BTreeMap<String, BTreeSet<String>>>,
     buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
     /// The ready admission each `buyer_ready` entry stands for.
     ready_ids: std::sync::Mutex<BTreeMap<(String, String), String>>,
@@ -129,6 +136,8 @@ impl Engine {
             vouched: Default::default(),
             ready_seen: Default::default(),
             requote: Default::default(),
+            wanted: Default::default(),
+            asked: Default::default(),
             buyer_ready: Default::default(),
             ready_ids: Default::default(),
             lifecycle: Default::default(),
@@ -196,11 +205,22 @@ impl Engine {
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
         self.known.lock().unwrap().insert(peer.into());
         match message {
-            Message::Hello { version, .. } => {
+            Message::Hello { version, models } => {
                 ensure!(version == 1, "unsupported channel version");
+                let mut wanted = self.wanted.lock().unwrap();
+                if wanted.len() >= WANTED_PEERS && !wanted.contains_key(peer) {
+                    wanted.clear();
+                }
+                let set = wanted.entry(peer.into()).or_default();
+                let priced = self.service.ledger.pricing()?;
+                set.extend(
+                    models
+                        .into_iter()
+                        .filter(|model| priced.contains_key(model)),
+                );
                 Ok(vec![])
             }
-            Message::Quote => self.quote(peer).await,
+            Message::Quote => self.quote(peer, None).await,
             Message::Admission { terms, invoice } => {
                 self.accept_admission(peer, terms, invoice).await
             }
@@ -241,9 +261,10 @@ impl Engine {
                     self.tickets.ready(&id, peer)?;
                     self.changed.notify_waiters();
                 }
+                let model = self.tickets.model(&id)?;
                 let mut replies = vec![Message::Ready { id }];
                 if matches!(settlement, ServeRecoverResponse::Billed { .. }) {
-                    replies.extend(self.quote(peer).await?);
+                    replies.extend(self.quote(peer, model.as_deref()).await?);
                 }
                 Ok(replies)
             }
@@ -417,6 +438,31 @@ impl Engine {
     /// Whether this node may buy from `peer` right now: the ledger's spending
     /// policy is automatic with budget left today (as built-in payments
     /// decided it), narrowed to `buy_peers` when the operator listed any.
+    /// Record that `model` is wanted from `peer`; true when it was not before.
+    fn ask(&self, peer: &str, model: &str) -> bool {
+        let mut asked = self.asked.lock().unwrap();
+        if asked.len() >= WANTED_PEERS && !asked.contains_key(peer) {
+            asked.clear();
+        }
+        asked.entry(peer.into()).or_default().insert(model.into())
+    }
+    /// The Hello for `peer`: configured buying ceilings plus models asked for.
+    fn hello(&self, peer: &str) -> Message {
+        let mut models: BTreeSet<String> = self.buying.keys().cloned().collect();
+        models.extend(
+            self.asked
+                .lock()
+                .unwrap()
+                .get(peer)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        Message::Hello {
+            version: 1,
+            models: models.into_iter().collect(),
+        }
+    }
     pub async fn buyer_enabled(&self, peer: &str) -> bool {
         if !self.buy_peers.is_empty() && !self.buy_peers.contains(peer) {
             return false;
@@ -462,6 +508,12 @@ impl Engine {
         })
     }
     pub async fn peer_up(&self, peer: &str) -> Result<Vec<Message>> {
+        self.peer_up_for(peer, None).await
+    }
+    /// `peer_up` for a request that selected `model` on `peer`: the Hello names
+    /// the model so the seller quotes (and this node pays) only for it. Without
+    /// a model, a seller is asked to quote only models already asked for.
+    pub async fn peer_up_for(&self, peer: &str, model: Option<&str>) -> Result<Vec<Message>> {
         if !self.buyer_enabled(peer).await {
             return Ok(vec![]);
         }
@@ -470,12 +522,21 @@ impl Engine {
         // not start a duplicate payment or send another hello/recover sequence.
         let _handshake = self.connected.handshake.lock().await;
         let Some(epoch) = self.connected.begin(peer) else {
-            // Connected already: quote again only after a failed deposit.
-            if self.requote.lock().unwrap().remove(peer) {
+            // Connected already: quote again after a failed deposit, or when
+            // this is the first request for a model the seller was not asked for.
+            let new_model = model.is_some_and(|model| self.ask(peer, model));
+            let requote = self.requote.lock().unwrap().remove(peer);
+            if new_model {
+                return Ok(vec![self.hello(peer), Message::Quote]);
+            }
+            if requote {
                 return Ok(vec![Message::Quote]);
             }
             return Ok(vec![]);
         };
+        if let Some(model) = model {
+            self.ask(peer, model);
+        }
         self.requote.lock().unwrap().remove(peer);
         let mut messages = Vec::new();
         // Observe uncertain payments before asking the authenticated seller for stored outcomes.
@@ -484,14 +545,14 @@ impl Engine {
                 messages.push(Message::Recover { id: terms.id });
             }
         }
-        messages.insert(
-            0,
-            Message::Hello {
-                version: 1,
-                models: self.buying.keys().cloned().collect(),
-            },
-        );
-        messages.push(Message::Quote);
+        let hello = self.hello(peer);
+        let names_models = matches!(&hello, Message::Hello { models, .. } if !models.is_empty());
+        messages.insert(0, hello);
+        // A Hello that names no model would ask for every priced model, so
+        // wait for a request that names one.
+        if names_models {
+            messages.push(Message::Quote);
+        }
         ensure!(
             self.connected.complete(peer, epoch),
             "peer disconnected during recovery"
@@ -508,10 +569,25 @@ impl Engine {
         );
         Ok(())
     }
-    async fn quote(&self, peer: &str) -> Result<Vec<Message>> {
+    /// Quote `peer` a deposit-bearing ticket per model. `only` names the one
+    /// model to refill (the one just consumed); otherwise the models the buyer
+    /// named in its Hello, or every priced model when it named none.
+    async fn quote(&self, peer: &str, only: Option<&str>) -> Result<Vec<Message>> {
         let _quote = self.quotes.lock().await;
         let mut replies = vec![];
+        let wanted = self
+            .wanted
+            .lock()
+            .unwrap()
+            .get(peer)
+            .cloned()
+            .unwrap_or_default();
         for (model, pricing) in self.service.ledger.pricing()? {
+            if only.is_some_and(|only| only != model)
+                || (only.is_none() && !wanted.is_empty() && !wanted.contains(&model))
+            {
+                continue;
+            }
             if self.tickets.outstanding(peer, &model)? {
                 if let Some(admission) = self.tickets.admission(peer, &model)? {
                     replies.push(serde_json::from_str(&admission)?);
@@ -573,13 +649,14 @@ impl Engine {
         let exchange = event["exchange_id"]
             .as_str()
             .context("exchange id missing")?;
-        let Some((peer, _)) = self.tickets.exchange(exchange)? else {
+        let Some((peer, id)) = self.tickets.exchange(exchange)? else {
             return Ok(None);
         };
         if !self.service.metered_trusted(&peer).await? {
             return Ok(None);
         }
-        let replies = self.quote(&peer).await?;
+        let model = self.tickets.model(&id)?;
+        let replies = self.quote(&peer, model.as_deref()).await?;
         Ok(Some((peer, replies)))
     }
 
