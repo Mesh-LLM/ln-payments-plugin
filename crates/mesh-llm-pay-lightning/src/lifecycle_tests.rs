@@ -226,3 +226,16 @@ async fn a_full_queue_drops_the_newest_events_and_counts_them() {
         6
     );
 }
+
+#[test]
+fn drops_are_reported_once_per_batch() {
+    let dropped = std::sync::atomic::AtomicU64::new(3);
+    let mut reported = 0;
+    super::report_drops(&dropped, &mut reported);
+    assert_eq!(reported, 3);
+    super::report_drops(&dropped, &mut reported);
+    assert_eq!(reported, 3, "nothing new, nothing written");
+    dropped.store(5, std::sync::atomic::Ordering::Relaxed);
+    super::report_drops(&dropped, &mut reported);
+    assert_eq!(reported, 5);
+}

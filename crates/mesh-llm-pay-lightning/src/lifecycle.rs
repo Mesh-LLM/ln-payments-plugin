@@ -13,11 +13,23 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
 use tokio::sync::mpsc;
+
+/// Write one line for the events dropped since the last report, if any.
+fn report_drops(dropped: &AtomicU64, reported: &mut u64) {
+    let total = dropped.load(Ordering::Relaxed);
+    if total > *reported {
+        crate::diagnostics::record_error(&anyhow::anyhow!(
+            "lifecycle events dropped, queue full or closed: {} more, {total} in total",
+            total - *reported
+        ));
+        *reported = total;
+    }
+}
 
 pub const CHANNEL: &str = "payment.lifecycle.v1";
 /// Exchanges awaiting or under observation; beyond this the oldest evidence
@@ -315,7 +327,7 @@ pub struct Lifecycle {
     /// Admission ID to its observed exchange, until its final settlement.
     open: Mutex<HashMap<String, Exchange>>,
     /// Events dropped because the queue was full or closed.
-    dropped: AtomicU64,
+    dropped: Arc<AtomicU64>,
 }
 
 fn bounded_insert<V>(map: &Mutex<HashMap<String, V>>, key: &str, value: V) {
@@ -334,8 +346,25 @@ impl Lifecycle {
         if self.sender.set(sender).is_err() {
             return;
         }
+        let dropped = self.dropped.clone();
         tokio::spawn(async move {
-            while let Some(event) = receiver.recv().await {
+            // Drops are counted on the payment path and written here, off it.
+            let mut reported = 0;
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                let event = tokio::select! {
+                    event = receiver.recv() => event,
+                    _ = tick.tick() => {
+                        report_drops(&dropped, &mut reported);
+                        continue;
+                    }
+                };
+                let Some(event) = event else {
+                    report_drops(&dropped, &mut reported);
+                    break;
+                };
+                report_drops(&dropped, &mut reported);
                 let Ok(body) = serde_json::to_vec(&event) else {
                     crate::diagnostics::record_error(&anyhow::anyhow!(
                         "lifecycle event not serialized: phase={} exchange={}",
@@ -382,19 +411,8 @@ impl Lifecycle {
             return;
         };
         for event in events.into_iter().flatten() {
-            if let Err(error) = sender.try_send(event) {
-                // A full queue repeats for every payment event, so write the
-                // first drop and then every 100th with the running total; an
-                // unbounded synchronous log write would delay payment work.
-                let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-                if dropped == 1 || dropped.is_multiple_of(100) {
-                    let event = error.into_inner();
-                    crate::diagnostics::record_error(&anyhow::anyhow!(
-                        "lifecycle events dropped, queue full or closed: total={dropped}, latest phase={} exchange={}",
-                        event.phase,
-                        event.exchange_id
-                    ));
-                }
+            if sender.try_send(event).is_err() {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
