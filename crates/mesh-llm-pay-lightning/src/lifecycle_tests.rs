@@ -204,10 +204,11 @@ async fn nothing_is_emitted_before_dispatch_or_without_a_publisher() {
     assert!(events.try_recv().is_err(), "abandoned closes observation");
 }
 
-/// A full queue drops the newest events and never blocks payment work; the
-/// drop is recorded (payload-free) through the diagnostics error log.
+/// A full queue drops the newest events and counts them. The drop log write
+/// goes to stderr here (the error log path is a process-global, unset in
+/// tests), so this checks the count, not the log text.
 #[tokio::test]
-async fn a_full_queue_drops_events_without_blocking() {
+async fn a_full_queue_drops_the_newest_events_and_counts_them() {
     let lifecycle = Lifecycle::default();
     let mut events = lifecycle.capture();
     for index in 0..70 {
@@ -219,4 +220,9 @@ async fn a_full_queue_drops_events_without_blocking() {
     }
     let delivered = std::iter::from_fn(|| events.try_recv().ok()).count();
     assert_eq!(delivered, 64);
+    // 70 payer exchanges emit one event each; 6 did not fit.
+    assert_eq!(
+        lifecycle.dropped.load(std::sync::atomic::Ordering::Relaxed),
+        6
+    );
 }

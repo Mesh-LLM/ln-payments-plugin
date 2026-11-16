@@ -12,7 +12,10 @@ use serde::Serialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::sync::mpsc;
 
@@ -311,6 +314,8 @@ pub struct Lifecycle {
     provider: Mutex<HashMap<String, ProviderDeposit>>,
     /// Admission ID to its observed exchange, until its final settlement.
     open: Mutex<HashMap<String, Exchange>>,
+    /// Events dropped because the queue was full or closed.
+    dropped: AtomicU64,
 }
 
 fn bounded_insert<V>(map: &Mutex<HashMap<String, V>>, key: &str, value: V) {
@@ -332,6 +337,11 @@ impl Lifecycle {
         tokio::spawn(async move {
             while let Some(event) = receiver.recv().await {
                 let Ok(body) = serde_json::to_vec(&event) else {
+                    crate::diagnostics::record_error(&anyhow::anyhow!(
+                        "lifecycle event not serialized: phase={} exchange={}",
+                        event.phase,
+                        event.exchange_id
+                    ));
                     continue;
                 };
                 let message = mesh_llm_plugin::proto::ChannelMessage {
@@ -351,10 +361,12 @@ impl Lifecycle {
                 .await
                 {
                     Ok(Ok(())) => {}
-                    Ok(Err(error)) => crate::diagnostics::record_error(&error.context(format!(
-                        "lifecycle event not sent: phase={} exchange={}",
-                        event.phase, event.exchange_id
-                    ))),
+                    // `{error:#}`: the error log keeps only the top message.
+                    Ok(Err(error)) => crate::diagnostics::record_error(&anyhow::anyhow!(
+                        "lifecycle event not sent: phase={} exchange={}: {error:#}",
+                        event.phase,
+                        event.exchange_id
+                    )),
                     Err(_) => crate::diagnostics::record_error(&anyhow::anyhow!(
                         "lifecycle event send timed out after 1s: phase={} exchange={}",
                         event.phase,
@@ -371,12 +383,18 @@ impl Lifecycle {
         };
         for event in events.into_iter().flatten() {
             if let Err(error) = sender.try_send(event) {
-                let event = error.into_inner();
-                crate::diagnostics::record_error(&anyhow::anyhow!(
-                    "lifecycle event dropped, queue full or closed: phase={} exchange={}",
-                    event.phase,
-                    event.exchange_id
-                ));
+                // A full queue repeats for every payment event, so write the
+                // first drop and then every 100th with the running total; an
+                // unbounded synchronous log write would delay payment work.
+                let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+                if dropped == 1 || dropped.is_multiple_of(100) {
+                    let event = error.into_inner();
+                    crate::diagnostics::record_error(&anyhow::anyhow!(
+                        "lifecycle events dropped, queue full or closed: total={dropped}, latest phase={} exchange={}",
+                        event.phase,
+                        event.exchange_id
+                    ));
+                }
             }
         }
     }
