@@ -442,7 +442,7 @@ async fn unconfigured_buyer_pays_under_automatic_policy_only_sellers_it_quoted()
     assert!(f.buyer.channel("seller", unsolicited).await.is_err());
     assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
     // Selecting the seller as a backend starts the handshake; its quote is paid.
-    let hello = f.buyer.peer_up("seller").await.unwrap();
+    let hello = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
     assert!(matches!(hello.first(), Some(Message::Hello { .. })));
     let admission = f
         .seller
@@ -1346,11 +1346,11 @@ async fn first_request_for_another_model_on_a_live_connection_asks_for_it() {
 
 /// A peer pre-warm names no model, so it must not ask for every priced model.
 #[tokio::test]
-async fn model_less_pre_warm_sends_hello_without_quote() {
+async fn model_less_pre_warm_sends_nothing() {
     let mut f = Fixture::new();
     f.buyer.buying.clear();
     let opening = f.buyer.peer_up("seller").await.unwrap();
-    assert!(matches!(&opening[..], [Message::Hello { models, .. }] if models.is_empty()));
+    assert!(opening.is_empty(), "no model named: no Hello, no Quote");
 }
 
 /// Older buyers send an empty Hello and still get every priced model quoted
@@ -1488,4 +1488,29 @@ async fn wanted_eviction_keeps_other_peers_scopes() {
     let wanted = f.seller.wanted.lock().unwrap();
     assert_eq!(wanted.len(), WANTED_PEERS);
     assert!(wanted.contains_key(&format!("peer-{:05}", WANTED_PEERS)));
+}
+
+/// Hellos can be delivered out of order; a late smaller one never shrinks the scope.
+#[tokio::test]
+async fn late_smaller_hello_does_not_shrink_the_scope() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    for models in [vec!["model", "other"], vec!["model"]] {
+        f.seller
+            .channel(
+                "buyer",
+                Message::Hello {
+                    version: 1,
+                    models: models.into_iter().map(String::from).collect(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model", "other"]);
 }

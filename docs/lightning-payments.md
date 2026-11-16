@@ -136,7 +136,8 @@ same dead invoice until restart.
 Prepared tickets are per model. The buyer's `Hello` is its whole current scope:
 its configured buying ceilings plus the models it has asked this seller for
 (the model of the request that selected it, and of any recovered request). The
-seller replaces its remembered scope with each `Hello` and quotes a deposit only
+seller adds each `Hello` to the scope it remembers for that peer (until it
+restarts; Hellos can arrive out of order) and quotes a deposit only
 for the priced models in it, then refills only the model a request consumed.
 Every buyer `Quote` is preceded by its `Hello`, so a seller that lost the scope
 (restart, or eviction at 1,024 peers, one peer at a time) learns it again. A
@@ -144,7 +145,7 @@ priced model that is absent from the `Hello`, such as one the seller prices but
 does not serve, costs the payer nothing. A buyer whose `Hello` names no model
 (an older plugin) is quoted every priced model, so it still pays a deposit per
 priced model until it upgrades. A new buyer with no configured ceilings and no
-selected model sends an empty `Hello` and no `Quote`.
+selected model sends nothing, because an empty `Hello` would ask for every priced model.
 
 `Recover { id }` lets a payer refetch the settlement of a request after a
 disconnect or restart. It never re-dispatches: a request still in progress is

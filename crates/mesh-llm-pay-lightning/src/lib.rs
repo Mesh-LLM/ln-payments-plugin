@@ -44,14 +44,16 @@ use std::{
 fn evict_one<V>(map: &mut BTreeMap<String, V>, key: &str) {
     if map.len() >= WANTED_PEERS
         && !map.contains_key(key)
-        && let Some(oldest) = map.keys().next().cloned()
+        && let Some(first) = map.keys().next().cloned()
     {
-        map.remove(&oldest);
+        map.remove(&first);
     }
 }
 pub const CHANNEL: &str = "pay.ln.v1";
 /// Bound on peers whose wanted-model sets are remembered in memory.
 const WANTED_PEERS: usize = 1024;
+/// Bound on the models remembered per peer.
+const WANTED_MODELS: usize = 64;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Message {
@@ -215,15 +217,7 @@ impl Engine {
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
         self.known.lock().unwrap().insert(peer.into());
         match message {
-            Message::Hello { version, models } => {
-                ensure!(version == 1, "unsupported channel version");
-                // The Hello is the buyer's whole current scope: replace, never
-                // extend. Unpriced names stay, so pricing a model later applies.
-                let mut wanted = self.wanted.lock().unwrap();
-                evict_one(&mut wanted, peer);
-                wanted.insert(peer.into(), models.into_iter().collect());
-                Ok(vec![])
-            }
+            Message::Hello { version, models } => self.receive_hello(peer, version, models),
             Message::Quote => self.quote(peer, None).await,
             Message::Admission { terms, invoice } => {
                 self.accept_admission(peer, terms, invoice).await
@@ -308,6 +302,23 @@ impl Engine {
                 Ok(vec![])
             }
         }
+    }
+    /// Seller: remember the models `peer` named, for `quote`.
+    fn receive_hello(&self, peer: &str, version: u32, models: Vec<String>) -> Result<Vec<Message>> {
+        ensure!(version == 1, "unsupported channel version");
+        // Hellos from one buyer can be delivered out of order, so they
+        // only add: a late, smaller Hello must not shrink the scope.
+        // Unpriced names stay, so pricing a model later applies.
+        // A scope lasts until this seller restarts.
+        let mut wanted = self.wanted.lock().unwrap();
+        evict_one(&mut wanted, peer);
+        let scope = wanted.entry(peer.into()).or_default();
+        for model in models {
+            if scope.len() < WANTED_MODELS {
+                scope.insert(model);
+            }
+        }
+        Ok(vec![])
     }
     /// Buyer: check the seller's bill, pay any final and close the request.
     async fn receive_settlement(
@@ -449,8 +460,8 @@ impl Engine {
         asked.entry(peer.into()).or_default().insert(model.into())
     }
     /// A scoped Quote request: the Hello that names the wanted models, then the
-    /// Quote. Nothing when no model is named, because the seller would read an
-    /// empty Hello as every priced model. Every Quote carries its Hello so a
+    /// Quote. Nothing when no model is named: an empty Hello would read as every
+    /// priced model, and if delivered late it could not undo a named one. Every Quote carries its Hello so a
     /// seller that lost this peer's scope (restart, eviction) cannot widen it.
     fn scoped_quote(&self, peer: &str) -> Vec<Message> {
         match self.hello(peer) {
@@ -557,8 +568,11 @@ impl Engine {
         }
         // A Hello naming no model would ask for every priced model, so
         // `scoped_quote` stays silent until a request names one.
-        messages.insert(0, self.hello(peer));
-        messages.extend(self.scoped_quote(peer).into_iter().skip(1));
+        let mut scoped = self.scoped_quote(peer).into_iter();
+        if let Some(hello) = scoped.next() {
+            messages.insert(0, hello);
+            messages.extend(scoped);
+        }
         ensure!(
             self.connected.complete(peer, epoch),
             "peer disconnected during recovery"
