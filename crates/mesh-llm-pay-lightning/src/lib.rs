@@ -314,9 +314,15 @@ impl Engine {
         evict_one(&mut wanted, peer);
         let scope = wanted.entry(peer.into()).or_default();
         for model in models {
-            if scope.len() < WANTED_MODELS {
-                scope.insert(model);
+            // A full scope makes room for the newest name, so a newly
+            // requested model is never the one dropped.
+            if scope.len() >= WANTED_MODELS
+                && !scope.contains(&model)
+                && let Some(first) = scope.iter().next().cloned()
+            {
+                scope.remove(&first);
             }
+            scope.insert(model);
         }
         Ok(vec![])
     }

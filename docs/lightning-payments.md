@@ -137,7 +137,7 @@ Prepared tickets are per model. The buyer's `Hello` is its whole current scope:
 its configured buying ceilings plus the models it has asked this seller for
 (the model of the request that selected it, and of any recovered request). The
 seller adds each `Hello` to the scope it remembers for that peer (until it
-restarts; Hellos can arrive out of order) and quotes a deposit only
+restarts, capped at 64 models per peer with the newest kept; Hellos can arrive out of order) and quotes a deposit only
 for the priced models in it, then refills only the model a request consumed.
 Every buyer `Quote` is preceded by its `Hello`, so a seller that lost the scope
 (restart, or eviction at 1,024 peers, one peer at a time) learns it again. A

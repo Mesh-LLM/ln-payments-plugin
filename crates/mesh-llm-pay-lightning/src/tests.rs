@@ -1514,3 +1514,33 @@ async fn late_smaller_hello_does_not_shrink_the_scope() {
     let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
     assert_eq!(admission_models(&quoted), ["model", "other"]);
 }
+
+/// A full scope of unpriced names does not keep a newly requested model out.
+#[tokio::test]
+async fn full_scope_still_admits_a_newly_named_model() {
+    let f = Fixture::new();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: (0..WANTED_MODELS)
+                    .map(|i| format!("a-unpriced-{i:03}"))
+                    .collect(),
+            },
+        )
+        .await
+        .unwrap();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec!["model".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model"]);
+}
