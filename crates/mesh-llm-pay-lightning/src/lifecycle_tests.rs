@@ -203,3 +203,20 @@ async fn nothing_is_emitted_before_dispatch_or_without_a_publisher() {
     lifecycle.payer_settled("private-recovery", None, None, 1);
     assert!(events.try_recv().is_err(), "abandoned closes observation");
 }
+
+/// A full queue drops the newest events and never blocks payment work; the
+/// drop is recorded (payload-free) through the diagnostics error log.
+#[tokio::test]
+async fn a_full_queue_drops_events_without_blocking() {
+    let lifecycle = Lifecycle::default();
+    let mut events = lifecycle.capture();
+    for index in 0..70 {
+        let id = format!("admission-{index}");
+        let mut terms = terms();
+        terms.id = id.clone();
+        lifecycle.payer_admitted(&terms, 100, None);
+        lifecycle.payer_dispatched(&id, &format!("exchange-{index}"));
+    }
+    let delivered = std::iter::from_fn(|| events.try_recv().ok()).count();
+    assert_eq!(delivered, 64);
+}

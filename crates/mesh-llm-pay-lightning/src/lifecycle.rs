@@ -342,11 +342,25 @@ impl Lifecycle {
                     message_kind: "lifecycle".into(),
                     ..Default::default()
                 };
-                let _ = tokio::time::timeout(
+                // Delivery stays best-effort, but a loss is recorded (payload-free)
+                // so a missing lifecycle event can be told from one never sent.
+                match tokio::time::timeout(
                     std::time::Duration::from_secs(1),
                     context.send_channel_message(message),
                 )
-                .await;
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => crate::diagnostics::record_error(&error.context(format!(
+                        "lifecycle event not sent: phase={} exchange={}",
+                        event.phase, event.exchange_id
+                    ))),
+                    Err(_) => crate::diagnostics::record_error(&anyhow::anyhow!(
+                        "lifecycle event send timed out after 1s: phase={} exchange={}",
+                        event.phase,
+                        event.exchange_id
+                    )),
+                }
             }
         });
     }
@@ -356,7 +370,14 @@ impl Lifecycle {
             return;
         };
         for event in events.into_iter().flatten() {
-            let _ = sender.try_send(event);
+            if let Err(error) = sender.try_send(event) {
+                let event = error.into_inner();
+                crate::diagnostics::record_error(&anyhow::anyhow!(
+                    "lifecycle event dropped, queue full or closed: phase={} exchange={}",
+                    event.phase,
+                    event.exchange_id
+                ));
+            }
         }
     }
 
