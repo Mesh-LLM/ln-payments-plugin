@@ -12,9 +12,24 @@ use serde::Serialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::sync::mpsc;
+
+/// Write one line for the events dropped since the last report, if any.
+fn report_drops(dropped: &AtomicU64, reported: &mut u64) {
+    let total = dropped.load(Ordering::Relaxed);
+    if total > *reported {
+        crate::diagnostics::record_error(&anyhow::anyhow!(
+            "lifecycle events dropped, queue full or closed: {} more, {total} in total",
+            total - *reported
+        ));
+        *reported = total;
+    }
+}
 
 pub const CHANNEL: &str = "payment.lifecycle.v1";
 /// Exchanges awaiting or under observation; beyond this the oldest evidence
@@ -311,6 +326,8 @@ pub struct Lifecycle {
     provider: Mutex<HashMap<String, ProviderDeposit>>,
     /// Admission ID to its observed exchange, until its final settlement.
     open: Mutex<HashMap<String, Exchange>>,
+    /// Events dropped because the queue was full or closed.
+    dropped: Arc<AtomicU64>,
 }
 
 fn bounded_insert<V>(map: &Mutex<HashMap<String, V>>, key: &str, value: V) {
@@ -329,9 +346,31 @@ impl Lifecycle {
         if self.sender.set(sender).is_err() {
             return;
         }
+        let dropped = self.dropped.clone();
         tokio::spawn(async move {
-            while let Some(event) = receiver.recv().await {
+            // Drops are counted on the payment path and written here, off it.
+            let mut reported = 0;
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                let event = tokio::select! {
+                    event = receiver.recv() => event,
+                    _ = tick.tick() => {
+                        report_drops(&dropped, &mut reported);
+                        continue;
+                    }
+                };
+                let Some(event) = event else {
+                    report_drops(&dropped, &mut reported);
+                    break;
+                };
+                report_drops(&dropped, &mut reported);
                 let Ok(body) = serde_json::to_vec(&event) else {
+                    crate::diagnostics::record_error(&anyhow::anyhow!(
+                        "lifecycle event not serialized: phase={} exchange={}",
+                        event.phase,
+                        event.exchange_id
+                    ));
                     continue;
                 };
                 let message = mesh_llm_plugin::proto::ChannelMessage {
@@ -342,11 +381,27 @@ impl Lifecycle {
                     message_kind: "lifecycle".into(),
                     ..Default::default()
                 };
-                let _ = tokio::time::timeout(
+                // Delivery stays best-effort, but a loss is recorded (payload-free)
+                // so a missing lifecycle event can be told from one never sent.
+                match tokio::time::timeout(
                     std::time::Duration::from_secs(1),
                     context.send_channel_message(message),
                 )
-                .await;
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    // `{error:#}`: the error log keeps only the top message.
+                    Ok(Err(error)) => crate::diagnostics::record_error(&anyhow::anyhow!(
+                        "lifecycle event not sent: phase={} exchange={}: {error:#}",
+                        event.phase,
+                        event.exchange_id
+                    )),
+                    Err(_) => crate::diagnostics::record_error(&anyhow::anyhow!(
+                        "lifecycle event send timed out after 1s: phase={} exchange={}",
+                        event.phase,
+                        event.exchange_id
+                    )),
+                }
             }
         });
     }
@@ -356,7 +411,9 @@ impl Lifecycle {
             return;
         };
         for event in events.into_iter().flatten() {
-            let _ = sender.try_send(event);
+            if sender.try_send(event).is_err() {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 

@@ -203,3 +203,39 @@ async fn nothing_is_emitted_before_dispatch_or_without_a_publisher() {
     lifecycle.payer_settled("private-recovery", None, None, 1);
     assert!(events.try_recv().is_err(), "abandoned closes observation");
 }
+
+/// A full queue drops the newest events and counts them. The drop log write
+/// goes to stderr here (the error log path is a process-global, unset in
+/// tests), so this checks the count, not the log text.
+#[tokio::test]
+async fn a_full_queue_drops_the_newest_events_and_counts_them() {
+    let lifecycle = Lifecycle::default();
+    let mut events = lifecycle.capture();
+    for index in 0..70 {
+        let id = format!("admission-{index}");
+        let mut terms = terms();
+        terms.id = id.clone();
+        lifecycle.payer_admitted(&terms, 100, None);
+        lifecycle.payer_dispatched(&id, &format!("exchange-{index}"));
+    }
+    let delivered = std::iter::from_fn(|| events.try_recv().ok()).count();
+    assert_eq!(delivered, 64);
+    // 70 payer exchanges emit one event each; 6 did not fit.
+    assert_eq!(
+        lifecycle.dropped.load(std::sync::atomic::Ordering::Relaxed),
+        6
+    );
+}
+
+#[test]
+fn drops_are_reported_once_per_batch() {
+    let dropped = std::sync::atomic::AtomicU64::new(3);
+    let mut reported = 0;
+    super::report_drops(&dropped, &mut reported);
+    assert_eq!(reported, 3);
+    super::report_drops(&dropped, &mut reported);
+    assert_eq!(reported, 3, "nothing new, nothing written");
+    dropped.store(5, std::sync::atomic::Ordering::Relaxed);
+    super::report_drops(&dropped, &mut reported);
+    assert_eq!(reported, 5);
+}
