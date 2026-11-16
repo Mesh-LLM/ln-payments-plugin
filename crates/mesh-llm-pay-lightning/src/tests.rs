@@ -978,7 +978,10 @@ async fn failed_cold_deposit_quotes_a_fresh_invoice_on_the_next_request() {
 
     // Next request on the same connection quotes again and gets a new invoice.
     let again = f.buyer.peer_up("seller").await.unwrap();
-    assert!(matches!(&again[..], [Message::Quote]));
+    assert!(matches!(
+        &again[..],
+        [Message::Hello { .. }, Message::Quote]
+    ));
     let admission = f
         .seller
         .channel("buyer", Message::Quote)
@@ -1426,4 +1429,63 @@ async fn replenish_requotes_only_the_consumed_model() {
     let paid = f.buyer.channel("seller", bill).await.unwrap().remove(0);
     let after = f.seller.channel("buyer", paid).await.unwrap();
     assert_eq!(admission_models(&after), ["model"]);
+}
+
+/// A Hello naming only models the seller does not price is a scoped Hello, not
+/// an empty one: nothing is quoted.
+#[tokio::test]
+async fn hello_naming_only_unpriced_models_gets_no_quote() {
+    let f = Fixture::new();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec!["not-priced".into()],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        f.seller
+            .channel("buyer", Message::Quote)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Every buyer Quote follows its Hello, so a seller that lost the peer's scope
+/// (restart or eviction) learns it again before quoting.
+#[tokio::test]
+async fn requote_resends_the_scoped_hello() {
+    let f = Fixture::new();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    f.buyer.requote.lock().unwrap().insert("seller".into());
+    let again = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    assert!(matches!(
+        &again[..],
+        [Message::Hello { models, .. }, Message::Quote] if models.contains(&"model".to_string())
+    ));
+}
+
+/// Eviction drops one peer's scope, not everyone's.
+#[tokio::test]
+async fn wanted_eviction_keeps_other_peers_scopes() {
+    let f = Fixture::new();
+    for index in 0..=WANTED_PEERS {
+        f.seller
+            .channel(
+                &format!("peer-{index:05}"),
+                Message::Hello {
+                    version: 1,
+                    models: vec!["model".into()],
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let wanted = f.seller.wanted.lock().unwrap();
+    assert_eq!(wanted.len(), WANTED_PEERS);
+    assert!(wanted.contains_key(&format!("peer-{:05}", WANTED_PEERS)));
 }
