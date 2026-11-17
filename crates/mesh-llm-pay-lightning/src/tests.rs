@@ -1340,6 +1340,28 @@ async fn buyer_pays_only_for_the_model_it_asked_for() {
     assert_eq!(f.network.sends.load(Ordering::SeqCst), 1, "one deposit");
 }
 
+/// A configured seller's admission is not paid while this node has asked it for
+/// no model at all.
+#[tokio::test]
+async fn admission_is_not_paid_before_any_model_is_asked() {
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(
+        f.buyer
+            .channel("seller", admission)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+}
+
 /// A request left approved for a model the buyer no longer asks for must not
 /// widen the Hello on reconnect.
 #[tokio::test]

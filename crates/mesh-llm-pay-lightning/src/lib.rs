@@ -375,9 +375,8 @@ impl Engine {
         );
         // The seller may quote a model this node never asked it for (a Quote
         // that overtook its Hello, or an older seller). Pay only for the
-        // models asked; with none asked yet, any quote stays acceptable.
+        // models asked; with none asked, an unsolicited admission is not paid.
         if let Message::Hello { models, .. } = self.hello(peer)
-            && !models.is_empty()
             && !models.contains(&terms.model)
         {
             return Ok(vec![]);
