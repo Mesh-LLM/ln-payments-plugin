@@ -373,6 +373,15 @@ impl Engine {
             self.buy_peers.contains(peer) || self.connected.is_connected(peer),
             "seller not authorized"
         );
+        // The seller may quote a model this node never asked it for (a Quote
+        // that overtook its Hello, or an older seller). Pay only for the
+        // models asked; with none asked yet, any quote stays acceptable.
+        if let Message::Hello { models, .. } = self.hello(peer)
+            && !models.is_empty()
+            && !models.contains(&terms.model)
+        {
+            return Ok(vec![]);
+        }
         let cap = self.buyer_cap(peer, &terms.model, &terms.pricing).await?;
         let stored = self.service.ledger.request_terms(&terms.id)?;
         let proposed = RequestTerms {

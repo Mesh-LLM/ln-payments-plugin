@@ -1320,6 +1320,26 @@ async fn buyer_naming_its_model_is_quoted_only_that_model() {
     assert_eq!(f.network.sends.load(Ordering::SeqCst), 1, "one deposit");
 }
 
+/// A seller that quotes every priced model, because its Hello scope was lost or
+/// raced, is paid only for the model this buyer asked for.
+#[tokio::test]
+async fn buyer_pays_only_for_the_model_it_asked_for() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    // The seller never saw the Hello: it quotes everything.
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted).len(), 2);
+    for admission in quoted {
+        f.buyer.channel("seller", admission).await.unwrap();
+    }
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1, "one deposit");
+}
+
 /// A first request for a second model on a live connection asks for it.
 #[tokio::test]
 async fn first_request_for_another_model_on_a_live_connection_asks_for_it() {
@@ -1387,6 +1407,8 @@ async fn replenish_requotes_only_the_consumed_model() {
         .ledger
         .set_pricing("other", Some(&price()))
         .unwrap();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    f.buyer.peer_up_for("seller", Some("other")).await.unwrap();
     f.seller
         .channel(
             "buyer",

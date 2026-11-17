@@ -142,7 +142,7 @@ for the priced models in it, then refills only the model a request consumed.
 Every buyer `Quote` is preceded by its `Hello`, so a seller that lost the scope
 (restart, or eviction at 1,024 peers, one peer at a time) learns it again. A
 priced model that is absent from the `Hello`, such as one the seller prices but
-does not serve, costs the payer nothing. A buyer whose `Hello` names no model
+does not serve, costs the payer nothing. The buyer also pays only an admission for a model in its own scope, so a seller that quotes more (a `Quote` that overtook its `Hello`, or an older seller) is not paid for the extra models. A buyer whose `Hello` names no model
 (an older plugin) is quoted every priced model, so it still pays a deposit per
 priced model until it upgrades. A new buyer with no configured ceilings and no
 selected model sends nothing, because an empty `Hello` would ask for every priced model.
