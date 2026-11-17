@@ -576,8 +576,10 @@ impl Engine {
         let mut messages = Vec::new();
         // Observe uncertain payments before asking the authenticated seller for stored outcomes.
         for terms in self.service.reconcile_buyer().await?.approved {
+            // Recovery does not ask for the request's model: a request the
+            // seller never admits stays approved, and asking for its model on
+            // every restart would pay a fresh deposit for it each time.
             if terms.peer == peer {
-                self.ask(peer, &terms.model);
                 messages.push(Message::Recover { id: terms.id });
             }
         }

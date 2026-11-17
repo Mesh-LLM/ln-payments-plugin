@@ -1340,6 +1340,44 @@ async fn buyer_pays_only_for_the_model_it_asked_for() {
     assert_eq!(f.network.sends.load(Ordering::SeqCst), 1, "one deposit");
 }
 
+/// A request left approved for a model the buyer no longer asks for must not
+/// widen the Hello on reconnect.
+#[tokio::test]
+async fn stale_approved_request_does_not_widen_the_hello() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("stale", Some(&price()))
+        .unwrap();
+    // A deposit paid for "stale" that the seller never admits stays approved.
+    let mut quoted = vec![];
+    for message in f.buyer.peer_up_for("seller", Some("stale")).await.unwrap() {
+        quoted.extend(f.seller.channel("buyer", message).await.unwrap());
+    }
+    for admission in quoted {
+        f.buyer.channel("seller", admission).await.unwrap();
+    }
+    assert!(
+        f.buyer
+            .service
+            .ledger
+            .requests()
+            .unwrap()
+            .iter()
+            .any(|r| r.state == "approved" && r.terms.model == "stale")
+    );
+    // Restart: this node forgets what it asked for and reconnects.
+    f.buyer.asked.lock().unwrap().clear();
+    f.buyer.peer_down("seller");
+    let opening = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    let Some(Message::Hello { models, .. }) = opening.first() else {
+        panic!("no hello")
+    };
+    assert!(!models.contains(&"stale".to_string()), "{models:?}");
+    assert!(opening.iter().any(|m| matches!(m, Message::Recover { .. })));
+}
+
 /// A first request for a second model on a live connection asks for it.
 #[tokio::test]
 async fn first_request_for_another_model_on_a_live_connection_asks_for_it() {
