@@ -415,7 +415,7 @@ async fn buyer_dispatch(
     let model = event["model"].as_str().context("selected model missing")?;
     let deadline = std::time::Duration::from_secs(28);
     tokio::time::timeout(deadline, async {
-        for message in engine.peer_up(peer).await? {
+        for message in engine.peer_up_for(peer, Some(model)).await? {
             if let Err(error) = send(context, peer, &message).await {
                 engine.peer_down(peer);
                 return Err(error);

@@ -133,6 +133,20 @@ still settle and is never paid twice, and a ready or consumed ticket is never
 dropped. Without this, a single failed cold deposit left the seller quoting the
 same dead invoice until restart.
 
+Prepared tickets are per model. The buyer's `Hello` is its whole current scope:
+its configured buying ceilings plus the models it has asked this seller for
+(the model of the request that selected it; a recovered request does not widen it, since one the seller never admits would be paid again on every restart). The
+seller adds each `Hello` to the scope it remembers for that peer (until it
+restarts, capped at 64 models per peer with the newest kept; Hellos can arrive out of order) and quotes a deposit only
+for the priced models in it, then refills only the model a request consumed.
+Every buyer `Quote` is preceded by its `Hello`, so a seller that lost the scope
+(restart, or eviction at 1,024 peers, one peer at a time) learns it again. A
+priced model that is absent from the `Hello`, such as one the seller prices but
+does not serve, costs the payer nothing. The buyer also pays only an admission for a model in its own scope, so a seller that quotes more (a `Quote` that overtook its `Hello`, or an older seller) is not paid for the extra models. A buyer whose `Hello` names no model
+(an older plugin) is quoted every priced model, so it still pays a deposit per
+priced model until it upgrades. A new buyer with no configured ceilings and no
+selected model sends nothing, because an empty `Hello` would ask for every priced model.
+
 `Recover { id }` lets a payer refetch the settlement of a request after a
 disconnect or restart. It never re-dispatches: a request still in progress is
 answered `Pending`, an abandoned one with a null-usage `Settlement` and

@@ -39,7 +39,21 @@ use std::{
     sync::Arc,
 };
 
+/// Make room for `key` in a bounded per-peer map by dropping one entry, never
+/// the whole map: clearing would widen every other peer's scope at once.
+fn evict_one<V>(map: &mut BTreeMap<String, V>, key: &str) {
+    if map.len() >= WANTED_PEERS
+        && !map.contains_key(key)
+        && let Some(first) = map.keys().next().cloned()
+    {
+        map.remove(&first);
+    }
+}
 pub const CHANNEL: &str = "pay.ln.v1";
+/// Bound on peers whose wanted-model sets are remembered in memory.
+const WANTED_PEERS: usize = 1024;
+/// Bound on the models remembered per peer.
+const WANTED_MODELS: usize = 64;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Message {
@@ -101,6 +115,11 @@ pub struct Engine {
     ready_seen: std::sync::Mutex<BTreeSet<String>>,
     /// Sellers whose last deposit failed; the next selected request quotes again.
     requote: std::sync::Mutex<BTreeSet<String>>,
+    /// Seller: the models each buyer named in its Hello. A buyer that named
+    /// none gets a ticket for every priced model, as older buyers expect.
+    wanted: std::sync::Mutex<BTreeMap<String, BTreeSet<String>>>,
+    /// Buyer: the models this node asked each seller to quote.
+    asked: std::sync::Mutex<BTreeMap<String, BTreeSet<String>>>,
     buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
     /// The ready admission each `buyer_ready` entry stands for.
     ready_ids: std::sync::Mutex<BTreeMap<(String, String), String>>,
@@ -129,6 +148,8 @@ impl Engine {
             vouched: Default::default(),
             ready_seen: Default::default(),
             requote: Default::default(),
+            wanted: Default::default(),
+            asked: Default::default(),
             buyer_ready: Default::default(),
             ready_ids: Default::default(),
             lifecycle: Default::default(),
@@ -196,11 +217,8 @@ impl Engine {
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
         self.known.lock().unwrap().insert(peer.into());
         match message {
-            Message::Hello { version, .. } => {
-                ensure!(version == 1, "unsupported channel version");
-                Ok(vec![])
-            }
-            Message::Quote => self.quote(peer).await,
+            Message::Hello { version, models } => self.receive_hello(peer, version, models),
+            Message::Quote => self.quote(peer, None).await,
             Message::Admission { terms, invoice } => {
                 self.accept_admission(peer, terms, invoice).await
             }
@@ -241,9 +259,10 @@ impl Engine {
                     self.tickets.ready(&id, peer)?;
                     self.changed.notify_waiters();
                 }
+                let model = self.tickets.model(&id)?;
                 let mut replies = vec![Message::Ready { id }];
                 if matches!(settlement, ServeRecoverResponse::Billed { .. }) {
-                    replies.extend(self.quote(peer).await?);
+                    replies.extend(self.quote(peer, model.as_deref()).await?);
                 }
                 Ok(replies)
             }
@@ -274,7 +293,7 @@ impl Engine {
                     .await?;
                 self.service.finish_metered(&id).await?;
                 self.lifecycle.abandoned(&id);
-                Ok(vec![Message::Quote])
+                Ok(self.scoped_quote(peer))
             }
             Message::Ready { id } => self.receive_ready(peer, id),
             Message::DepositFailed { id } => {
@@ -283,6 +302,29 @@ impl Engine {
                 Ok(vec![])
             }
         }
+    }
+    /// Seller: remember the models `peer` named, for `quote`.
+    fn receive_hello(&self, peer: &str, version: u32, models: Vec<String>) -> Result<Vec<Message>> {
+        ensure!(version == 1, "unsupported channel version");
+        // Hellos from one buyer can be delivered out of order, so they
+        // only add: a late, smaller Hello must not shrink the scope.
+        // Unpriced names stay, so pricing a model later applies.
+        // A scope lasts until this seller restarts.
+        let mut wanted = self.wanted.lock().unwrap();
+        evict_one(&mut wanted, peer);
+        let scope = wanted.entry(peer.into()).or_default();
+        for model in models {
+            // A full scope makes room for the newest name, so a newly
+            // requested model is never the one dropped.
+            if scope.len() >= WANTED_MODELS
+                && !scope.contains(&model)
+                && let Some(first) = scope.iter().next().cloned()
+            {
+                scope.remove(&first);
+            }
+            scope.insert(model);
+        }
+        Ok(vec![])
     }
     /// Buyer: check the seller's bill, pay any final and close the request.
     async fn receive_settlement(
@@ -331,6 +373,14 @@ impl Engine {
             self.buy_peers.contains(peer) || self.connected.is_connected(peer),
             "seller not authorized"
         );
+        // The seller may quote a model this node never asked it for (a Quote
+        // that overtook its Hello, or an older seller). Pay only for the
+        // models asked; with none asked, an unsolicited admission is not paid.
+        if let Message::Hello { models, .. } = self.hello(peer)
+            && !models.contains(&terms.model)
+        {
+            return Ok(vec![]);
+        }
         let cap = self.buyer_cap(peer, &terms.model, &terms.pricing).await?;
         let stored = self.service.ledger.request_terms(&terms.id)?;
         let proposed = RequestTerms {
@@ -417,6 +467,39 @@ impl Engine {
     /// Whether this node may buy from `peer` right now: the ledger's spending
     /// policy is automatic with budget left today (as built-in payments
     /// decided it), narrowed to `buy_peers` when the operator listed any.
+    /// Record that `model` is wanted from `peer`; true when it was not before.
+    fn ask(&self, peer: &str, model: &str) -> bool {
+        let mut asked = self.asked.lock().unwrap();
+        evict_one(&mut asked, peer);
+        asked.entry(peer.into()).or_default().insert(model.into())
+    }
+    /// A scoped Quote request: the Hello that names the wanted models, then the
+    /// Quote. Nothing when no model is named: an empty Hello would read as every
+    /// priced model, and if delivered late it could not undo a named one. Every Quote carries its Hello so a
+    /// seller that lost this peer's scope (restart, eviction) cannot widen it.
+    fn scoped_quote(&self, peer: &str) -> Vec<Message> {
+        match self.hello(peer) {
+            Message::Hello { models, .. } if models.is_empty() => vec![],
+            hello => vec![hello, Message::Quote],
+        }
+    }
+    /// The Hello for `peer`: configured buying ceilings plus models asked for.
+    fn hello(&self, peer: &str) -> Message {
+        let mut models: BTreeSet<String> = self.buying.keys().cloned().collect();
+        models.extend(
+            self.asked
+                .lock()
+                .unwrap()
+                .get(peer)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        Message::Hello {
+            version: 1,
+            models: models.into_iter().collect(),
+        }
+    }
     pub async fn buyer_enabled(&self, peer: &str) -> bool {
         if !self.buy_peers.is_empty() && !self.buy_peers.contains(peer) {
             return false;
@@ -462,6 +545,12 @@ impl Engine {
         })
     }
     pub async fn peer_up(&self, peer: &str) -> Result<Vec<Message>> {
+        self.peer_up_for(peer, None).await
+    }
+    /// `peer_up` for a request that selected `model` on `peer`: the Hello names
+    /// the model so the seller quotes (and this node pays) only for it. Without
+    /// a model, a seller is asked to quote only models already asked for.
+    pub async fn peer_up_for(&self, peer: &str, model: Option<&str>) -> Result<Vec<Message>> {
         if !self.buyer_enabled(peer).await {
             return Ok(vec![]);
         }
@@ -470,28 +559,36 @@ impl Engine {
         // not start a duplicate payment or send another hello/recover sequence.
         let _handshake = self.connected.handshake.lock().await;
         let Some(epoch) = self.connected.begin(peer) else {
-            // Connected already: quote again only after a failed deposit.
-            if self.requote.lock().unwrap().remove(peer) {
-                return Ok(vec![Message::Quote]);
+            // Connected already: quote again after a failed deposit, or when
+            // this is the first request for a model the seller was not asked for.
+            let new_model = model.is_some_and(|model| self.ask(peer, model));
+            let requote = self.requote.lock().unwrap().remove(peer);
+            if new_model || requote {
+                return Ok(self.scoped_quote(peer));
             }
             return Ok(vec![]);
         };
+        if let Some(model) = model {
+            self.ask(peer, model);
+        }
         self.requote.lock().unwrap().remove(peer);
         let mut messages = Vec::new();
         // Observe uncertain payments before asking the authenticated seller for stored outcomes.
         for terms in self.service.reconcile_buyer().await?.approved {
+            // Recovery does not ask for the request's model: a request the
+            // seller never admits stays approved, and asking for its model on
+            // every restart would pay a fresh deposit for it each time.
             if terms.peer == peer {
                 messages.push(Message::Recover { id: terms.id });
             }
         }
-        messages.insert(
-            0,
-            Message::Hello {
-                version: 1,
-                models: self.buying.keys().cloned().collect(),
-            },
-        );
-        messages.push(Message::Quote);
+        // A Hello naming no model would ask for every priced model, so
+        // `scoped_quote` stays silent until a request names one.
+        let mut scoped = self.scoped_quote(peer).into_iter();
+        if let Some(hello) = scoped.next() {
+            messages.insert(0, hello);
+            messages.extend(scoped);
+        }
         ensure!(
             self.connected.complete(peer, epoch),
             "peer disconnected during recovery"
@@ -508,10 +605,22 @@ impl Engine {
         );
         Ok(())
     }
-    async fn quote(&self, peer: &str) -> Result<Vec<Message>> {
+    /// Quote `peer` a deposit-bearing ticket per model. `only` names the one
+    /// model to refill (the one just consumed); otherwise the models the buyer
+    /// named in its Hello, or every priced model when it named none.
+    async fn quote(&self, peer: &str, only: Option<&str>) -> Result<Vec<Message>> {
         let _quote = self.quotes.lock().await;
         let mut replies = vec![];
+        let wanted = self.wanted.lock().unwrap().get(peer).cloned();
         for (model, pricing) in self.service.ledger.pricing()? {
+            if only.is_some_and(|only| only != model)
+                || (only.is_none()
+                    && wanted
+                        .as_ref()
+                        .is_some_and(|w| !w.is_empty() && !w.contains(&model)))
+            {
+                continue;
+            }
             if self.tickets.outstanding(peer, &model)? {
                 if let Some(admission) = self.tickets.admission(peer, &model)? {
                     replies.push(serde_json::from_str(&admission)?);
@@ -573,13 +682,14 @@ impl Engine {
         let exchange = event["exchange_id"]
             .as_str()
             .context("exchange id missing")?;
-        let Some((peer, _)) = self.tickets.exchange(exchange)? else {
+        let Some((peer, id)) = self.tickets.exchange(exchange)? else {
             return Ok(None);
         };
         if !self.service.metered_trusted(&peer).await? {
             return Ok(None);
         }
-        let replies = self.quote(&peer).await?;
+        let model = self.tickets.model(&id)?;
+        let replies = self.quote(&peer, model.as_deref()).await?;
         Ok(Some((peer, replies)))
     }
 

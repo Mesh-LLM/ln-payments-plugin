@@ -442,7 +442,7 @@ async fn unconfigured_buyer_pays_under_automatic_policy_only_sellers_it_quoted()
     assert!(f.buyer.channel("seller", unsolicited).await.is_err());
     assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
     // Selecting the seller as a backend starts the handshake; its quote is paid.
-    let hello = f.buyer.peer_up("seller").await.unwrap();
+    let hello = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
     assert!(matches!(hello.first(), Some(Message::Hello { .. })));
     let admission = f
         .seller
@@ -978,7 +978,10 @@ async fn failed_cold_deposit_quotes_a_fresh_invoice_on_the_next_request() {
 
     // Next request on the same connection quotes again and gets a new invoice.
     let again = f.buyer.peer_up("seller").await.unwrap();
-    assert!(matches!(&again[..], [Message::Quote]));
+    assert!(matches!(
+        &again[..],
+        [Message::Hello { .. }, Message::Quote]
+    ));
     let admission = f
         .seller
         .channel("buyer", Message::Quote)
@@ -1279,4 +1282,347 @@ async fn abandonment_cannot_replace_an_accepted_bill() {
             .await
             .is_err()
     );
+}
+
+fn admission_models(messages: &[Message]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Admission { terms, .. } => Some(terms.model.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The seller prices a model it never serves; a buyer that names the model it
+/// requests must be quoted, and pay a deposit for, that model only.
+#[tokio::test]
+async fn buyer_naming_its_model_is_quoted_only_that_model() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("unserved", Some(&price()))
+        .unwrap();
+    let opening = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    assert!(matches!(
+        &opening[..],
+        [Message::Hello { models, .. }, Message::Quote] if models == &["model".to_string()]
+    ));
+    let mut quoted = vec![];
+    for message in opening {
+        quoted.extend(f.seller.channel("buyer", message).await.unwrap());
+    }
+    assert_eq!(admission_models(&quoted), ["model"]);
+    for admission in quoted {
+        f.buyer.channel("seller", admission).await.unwrap();
+    }
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1, "one deposit");
+}
+
+/// A seller that quotes every priced model, because its Hello scope was lost or
+/// raced, is paid only for the model this buyer asked for.
+#[tokio::test]
+async fn buyer_pays_only_for_the_model_it_asked_for() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    // The seller never saw the Hello: it quotes everything.
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted).len(), 2);
+    for admission in quoted {
+        f.buyer.channel("seller", admission).await.unwrap();
+    }
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1, "one deposit");
+}
+
+/// A configured seller's admission is not paid while this node has asked it for
+/// no model at all.
+#[tokio::test]
+async fn admission_is_not_paid_before_any_model_is_asked() {
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(
+        f.buyer
+            .channel("seller", admission)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+}
+
+/// A request left approved for a model the buyer no longer asks for must not
+/// widen the Hello on reconnect.
+#[tokio::test]
+async fn stale_approved_request_does_not_widen_the_hello() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("stale", Some(&price()))
+        .unwrap();
+    // A deposit paid for "stale" that the seller never admits stays approved.
+    let mut quoted = vec![];
+    for message in f.buyer.peer_up_for("seller", Some("stale")).await.unwrap() {
+        quoted.extend(f.seller.channel("buyer", message).await.unwrap());
+    }
+    for admission in quoted {
+        f.buyer.channel("seller", admission).await.unwrap();
+    }
+    assert!(
+        f.buyer
+            .service
+            .ledger
+            .requests()
+            .unwrap()
+            .iter()
+            .any(|r| r.state == "approved" && r.terms.model == "stale")
+    );
+    // Restart: this node forgets what it asked for and reconnects.
+    f.buyer.asked.lock().unwrap().clear();
+    f.buyer.peer_down("seller");
+    let opening = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    let Some(Message::Hello { models, .. }) = opening.first() else {
+        panic!("no hello")
+    };
+    assert!(!models.contains(&"stale".to_string()), "{models:?}");
+    assert!(opening.iter().any(|m| matches!(m, Message::Recover { .. })));
+}
+
+/// A first request for a second model on a live connection asks for it.
+#[tokio::test]
+async fn first_request_for_another_model_on_a_live_connection_asks_for_it() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    assert!(
+        f.buyer
+            .peer_up_for("seller", Some("model"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let more = f.buyer.peer_up_for("seller", Some("other")).await.unwrap();
+    assert!(matches!(
+        &more[..],
+        [Message::Hello { models, .. }, Message::Quote] if models.contains(&"other".to_string())
+    ));
+}
+
+/// A peer pre-warm names no model, so it must not ask for every priced model.
+#[tokio::test]
+async fn model_less_pre_warm_sends_nothing() {
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    let opening = f.buyer.peer_up("seller").await.unwrap();
+    assert!(opening.is_empty(), "no model named: no Hello, no Quote");
+}
+
+/// Older buyers send an empty Hello and still get every priced model quoted
+/// (and so still overpay for a model the seller does not serve).
+#[tokio::test]
+async fn empty_hello_buyer_is_still_quoted_every_priced_model() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("unserved", Some(&price()))
+        .unwrap();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model", "unserved"]);
+}
+
+/// Refills after use and after a billed settlement re-quote only the model
+/// that was consumed, even when the buyer named several.
+#[tokio::test]
+async fn replenish_requotes_only_the_consumed_model() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    f.buyer.peer_up_for("seller", Some("other")).await.unwrap();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec!["model".into(), "other".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model", "other"]);
+    let mut paid = vec![];
+    for admission in quoted {
+        paid.push(
+            f.buyer
+                .channel("seller", admission)
+                .await
+                .unwrap()
+                .remove(0),
+        );
+    }
+    for paid in paid {
+        f.seller.channel("buyer", paid).await.unwrap();
+    }
+    let used = gate("seed", "buyer");
+    assert_eq!(f.seller.gate(&used).unwrap().decision, Decision::Allow);
+    let (_, refill) = f.seller.replenish(&used).await.unwrap().unwrap();
+    assert_eq!(admission_models(&refill), ["model"]);
+    // The refill is paid, then the first request is billed and settled.
+    let (_, bill) = f
+        .seller
+        .terminal(&terminal(
+            "seed",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let paid = f.buyer.channel("seller", bill).await.unwrap().remove(0);
+    let after = f.seller.channel("buyer", paid).await.unwrap();
+    assert_eq!(admission_models(&after), ["model"]);
+}
+
+/// A Hello naming only models the seller does not price is a scoped Hello, not
+/// an empty one: nothing is quoted.
+#[tokio::test]
+async fn hello_naming_only_unpriced_models_gets_no_quote() {
+    let f = Fixture::new();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec!["not-priced".into()],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        f.seller
+            .channel("buyer", Message::Quote)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Every buyer Quote follows its Hello, so a seller that lost the peer's scope
+/// (restart or eviction) learns it again before quoting.
+#[tokio::test]
+async fn requote_resends_the_scoped_hello() {
+    let f = Fixture::new();
+    f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    f.buyer.requote.lock().unwrap().insert("seller".into());
+    let again = f.buyer.peer_up_for("seller", Some("model")).await.unwrap();
+    assert!(matches!(
+        &again[..],
+        [Message::Hello { models, .. }, Message::Quote] if models.contains(&"model".to_string())
+    ));
+}
+
+/// Eviction drops one peer's scope, not everyone's.
+#[tokio::test]
+async fn wanted_eviction_keeps_other_peers_scopes() {
+    let f = Fixture::new();
+    for index in 0..=WANTED_PEERS {
+        f.seller
+            .channel(
+                &format!("peer-{index:05}"),
+                Message::Hello {
+                    version: 1,
+                    models: vec!["model".into()],
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let wanted = f.seller.wanted.lock().unwrap();
+    assert_eq!(wanted.len(), WANTED_PEERS);
+    assert!(wanted.contains_key(&format!("peer-{:05}", WANTED_PEERS)));
+}
+
+/// Hellos can be delivered out of order; a late smaller one never shrinks the scope.
+#[tokio::test]
+async fn late_smaller_hello_does_not_shrink_the_scope() {
+    let f = Fixture::new();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("other", Some(&price()))
+        .unwrap();
+    for models in [vec!["model", "other"], vec!["model"]] {
+        f.seller
+            .channel(
+                "buyer",
+                Message::Hello {
+                    version: 1,
+                    models: models.into_iter().map(String::from).collect(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model", "other"]);
+}
+
+/// A full scope of unpriced names does not keep a newly requested model out.
+#[tokio::test]
+async fn full_scope_still_admits_a_newly_named_model() {
+    let f = Fixture::new();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: (0..WANTED_MODELS)
+                    .map(|i| format!("a-unpriced-{i:03}"))
+                    .collect(),
+            },
+        )
+        .await
+        .unwrap();
+    f.seller
+        .channel(
+            "buyer",
+            Message::Hello {
+                version: 1,
+                models: vec!["model".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let quoted = f.seller.channel("buyer", Message::Quote).await.unwrap();
+    assert_eq!(admission_models(&quoted), ["model"]);
 }
