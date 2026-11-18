@@ -65,6 +65,11 @@ supervises the wallet; killing the utility does not kill that wallet.
 }
 ```
 
+The config `policy` is the first-run default: it is stored only when the ledger
+has no policy yet. A policy an operator later sets with the `policy` control
+command persists across plugin restarts, and editing the config file does not
+override it; change it with the `policy` command.
+
 The utility pins `wallet_id`, `provider` and `network` in the ledger directory
 before starting its engine. A changed identity or non-mainnet wallet is refused.
 The pin's historical `plugin` field records the **provider binding name**. First

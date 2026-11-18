@@ -609,3 +609,39 @@ async fn a_model_deposit_overrides_the_node_wide_one_until_cleared() -> Result<(
     assert!(service.ledger.model_admission_deposit_msat("big").is_err());
     Ok(())
 }
+
+#[test]
+fn configured_policy_seeds_once_and_a_runtime_policy_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let configured = Policy {
+        mode: ApprovalMode::FreeOnly,
+        daily_budget_msat: None,
+    };
+    let runtime = Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(20_000),
+    };
+    {
+        let ledger = Ledger::open(dir.path()).unwrap();
+        assert!(ledger.seed_policy(&configured).unwrap());
+        assert_eq!(ledger.policy().unwrap().mode, ApprovalMode::FreeOnly);
+        ledger.set_policy(&runtime).unwrap();
+    }
+    let ledger = Ledger::open(dir.path()).unwrap();
+    assert!(!ledger.seed_policy(&configured).unwrap());
+    let stored = ledger.policy().unwrap();
+    assert_eq!(stored.mode, ApprovalMode::Automatic);
+    assert_eq!(stored.daily_budget_msat, Some(20_000));
+}
+
+#[test]
+fn an_invalid_configured_policy_is_refused_without_storing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let invalid = Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: None,
+    };
+    assert!(ledger.seed_policy(&invalid).is_err());
+    assert!(ledger.seed_policy(&Policy::default()).unwrap());
+}

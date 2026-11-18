@@ -133,7 +133,9 @@ fn build_engine(
     crate::diagnostics::configure(config.timing_log.clone(), config.error_log.clone())?;
     let directory = &config.data_dir;
     let service = Arc::new(PaymentService::with_factory(directory, factory)?);
-    service.ledger.set_policy(&config.policy)?;
+    // The configured policy is the first-run default; a policy stored by the
+    // operator at runtime must survive a plugin restart.
+    service.ledger.seed_policy(&config.policy)?;
     for (model, price) in &config.prices {
         service.ledger.set_pricing(model, Some(price))?;
     }
