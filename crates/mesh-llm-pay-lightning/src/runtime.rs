@@ -135,7 +135,21 @@ fn build_engine(
     let service = Arc::new(PaymentService::with_factory(directory, factory)?);
     // The configured policy is the first-run default; a policy stored by the
     // operator at runtime must survive a plugin restart.
-    service.ledger.seed_policy(&config.policy)?;
+    if !service.ledger.seed_policy(&config.policy)? {
+        let stored = service.ledger.policy()?;
+        if stored != config.policy {
+            // One line per start: the stored policy wins, so say what is in force.
+            eprintln!(
+                "pay-lightning: keeping the stored spending policy (mode {:?}, daily budget {:?} msat); \
+                 the config policy (mode {:?}, daily budget {:?} msat) is only the first-run default. \
+                 Change it with the `policy` control command.",
+                stored.mode,
+                stored.daily_budget_msat,
+                config.policy.mode,
+                config.policy.daily_budget_msat
+            );
+        }
+    }
     for (model, price) in &config.prices {
         service.ledger.set_pricing(model, Some(price))?;
     }

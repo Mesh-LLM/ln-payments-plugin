@@ -645,3 +645,27 @@ fn an_invalid_configured_policy_is_refused_without_storing_it() {
     assert!(ledger.seed_policy(&invalid).is_err());
     assert!(ledger.seed_policy(&Policy::default()).unwrap());
 }
+
+#[test]
+fn a_restart_keeps_the_runtime_policy_and_its_remaining_daily_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = crate::now_ms();
+    {
+        let ledger = Ledger::open(dir.path()).unwrap();
+        assert!(ledger.seed_policy(&Policy::default()).unwrap());
+        ledger
+            .set_policy(&Policy {
+                mode: ApprovalMode::Automatic,
+                daily_budget_msat: Some(20_000),
+            })
+            .unwrap();
+        assert_eq!(ledger.available_budget(now).unwrap(), 20_000);
+    }
+    // Restart with the config file still saying free_only.
+    let ledger = Ledger::open(dir.path()).unwrap();
+    assert!(!ledger.seed_policy(&Policy::default()).unwrap());
+    let status = ledger.policy_status(now).unwrap();
+    assert_eq!(status["mode"], "automatic");
+    assert_eq!(status["remaining_daily_budget_msat"], 20_000);
+    assert_eq!(ledger.available_budget(now).unwrap(), 20_000);
+}
