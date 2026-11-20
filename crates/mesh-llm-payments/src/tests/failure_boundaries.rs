@@ -163,3 +163,26 @@ async fn assert_pending_survives_outage_and_expiry(
     service.await_authorization(&terms("second", 700)).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn a_restart_with_a_free_only_config_keeps_the_spent_runtime_budget() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let wallet = Arc::new(MockWallet::default());
+    {
+        let service = PaymentService::with_provider(directory.path(), wallet.clone())?;
+        service.ledger.seed_policy(&Policy::default())?;
+        service.ledger.set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(5000),
+        })?;
+        service.await_authorization(&terms("spent", 700)).await?;
+        service.pay_charge(&charge("spent", 0, 1, 600, 700)).await?;
+    }
+    let service = PaymentService::with_provider(directory.path(), wallet)?;
+    assert!(!service.ledger.seed_policy(&Policy::default())?);
+    let status = service.ledger.policy_status(crate::now_ms())?;
+    assert_eq!(status["mode"], "automatic");
+    assert_eq!(status["spent_today_msat"], 610);
+    assert_eq!(status["remaining_daily_budget_msat"], 5000 - 610);
+    Ok(())
+}

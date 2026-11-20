@@ -14,7 +14,7 @@ pub enum ApprovalMode {
     Automatic,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Policy {
     pub mode: ApprovalMode,
     pub daily_budget_msat: Option<u64>,

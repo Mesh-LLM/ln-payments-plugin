@@ -1,6 +1,7 @@
 //! Standalone plugin. Money-moving behavior requires explicit isolated-state config.
 use crate::{CHANNEL, Config, Engine, Message};
 use anyhow::{Context, Result, ensure};
+use mesh_llm_payments::ledger::Policy;
 use mesh_llm_payments::service::PaymentService;
 use mesh_llm_plugin::{
     PluginContext, PluginMetadata, PluginRuntime, SimplePlugin, mesh_channel, mesh_event_peer_down,
@@ -131,16 +132,43 @@ fn build_engine(
     config: Config,
 ) -> Result<Arc<Engine>> {
     crate::diagnostics::configure(config.timing_log.clone(), config.error_log.clone())?;
-    let directory = &config.data_dir;
-    let service = Arc::new(PaymentService::with_factory(directory, factory)?);
-    service.ledger.set_policy(&config.policy)?;
-    for (model, price) in &config.prices {
-        service.ledger.set_pricing(model, Some(price))?;
-    }
-    let mut engine = Engine::new(service, namespace, config.cap_msat, directory)?;
+    let service = open_service(factory, &config)?;
+    let mut engine = Engine::new(service, namespace, config.cap_msat, &config.data_dir)?;
     engine.buying = config.buy_prices;
     engine.buy_peers = config.buy_peers;
     Ok(Arc::new(engine))
+}
+
+/// Open the ledger and apply the config's defaults. The configured policy is the
+/// first-run default; a policy stored by the operator at runtime must survive a
+/// plugin restart.
+fn open_service(
+    factory: Arc<dyn mesh_llm_wallet::provisioning::WalletFactory>,
+    config: &Config,
+) -> Result<Arc<PaymentService>> {
+    let service = Arc::new(PaymentService::with_factory(&config.data_dir, factory)?);
+    if !service.ledger.seed_policy(&config.policy)?
+        && let Some(notice) = policy_notice(&service.ledger.policy()?, &config.policy)
+    {
+        // One line per start: the stored policy wins, so say what is in force.
+        eprintln!("pay-lightning: {notice}");
+    }
+    for (model, price) in &config.prices {
+        service.ledger.set_pricing(model, Some(price))?;
+    }
+    Ok(service)
+}
+
+/// The startup notice when the stored policy (which wins) differs from the config's.
+fn policy_notice(stored: &Policy, configured: &Policy) -> Option<String> {
+    (stored != configured).then(|| {
+        format!(
+            "keeping the stored spending policy (mode {:?}, daily budget {:?} msat); the config \
+             policy (mode {:?}, daily budget {:?} msat) is only the first-run default. Change it \
+             with the `policy` control command.",
+            stored.mode, stored.daily_budget_msat, configured.mode, configured.daily_budget_msat
+        )
+    })
 }
 
 type Prepared = (
@@ -596,5 +624,42 @@ mod tests {
             channels,
             vec![(CHANNEL, false), (crate::lifecycle::CHANNEL, true)]
         );
+    }
+
+    struct NeverOpened;
+    #[async_trait::async_trait]
+    impl mesh_llm_wallet::provisioning::WalletFactory for NeverOpened {
+        fn is_provisioned(&self, _: &std::path::Path) -> bool {
+            false
+        }
+        async fn open(
+            &self,
+            _: &std::path::Path,
+        ) -> Result<Arc<dyn mesh_llm_payments::wallet::WalletProvider>> {
+            anyhow::bail!("wallet is not needed to build the engine")
+        }
+    }
+
+    fn config(dir: &std::path::Path) -> Config {
+        serde_json::from_value(serde_json::json!({"data_dir": dir})).unwrap()
+    }
+
+    #[test]
+    fn restart_through_open_service_keeps_the_runtime_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Policy {
+            mode: mesh_llm_payments_types::control::ApprovalMode::Automatic,
+            daily_budget_msat: Some(20_000),
+        };
+        let first = open_service(Arc::new(NeverOpened), &config(dir.path())).unwrap();
+        assert_eq!(first.ledger.policy().unwrap(), Policy::default());
+        first.ledger.set_policy(&runtime).unwrap();
+        drop(first);
+        // The config file still says free_only (the default).
+        let restarted = open_service(Arc::new(NeverOpened), &config(dir.path())).unwrap();
+        assert_eq!(restarted.ledger.policy().unwrap(), runtime);
+        let notice = policy_notice(&runtime, &Policy::default()).unwrap();
+        assert!(notice.contains("Automatic") && notice.contains("FreeOnly"));
+        assert!(policy_notice(&runtime, &runtime).is_none());
     }
 }

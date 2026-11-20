@@ -77,6 +77,18 @@ impl Ledger {
         self.set_setting("policy", &serde_json::to_string(policy)?)
     }
 
+    /// Store `policy` only when no policy is stored yet; returns whether it
+    /// was written. A policy an operator set at runtime survives restarts, so
+    /// the configured one is a first-run default, not an override.
+    pub fn seed_policy(&self, policy: &Policy) -> Result<bool> {
+        policy.validate()?;
+        let written = self.lock()?.execute(
+            "INSERT INTO settings VALUES ('policy', ?1) ON CONFLICT(key) DO NOTHING",
+            params![serde_json::to_string(policy)?],
+        )?;
+        Ok(written == 1)
+    }
+
     /// The operator's minimum payment in msat (default 1 sat): the seller's
     /// sub-minimum final round-up, and the largest seller minimum this node
     /// will pay as a buyer.

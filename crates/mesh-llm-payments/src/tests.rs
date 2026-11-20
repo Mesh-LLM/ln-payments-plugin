@@ -609,3 +609,63 @@ async fn a_model_deposit_overrides_the_node_wide_one_until_cleared() -> Result<(
     assert!(service.ledger.model_admission_deposit_msat("big").is_err());
     Ok(())
 }
+
+#[test]
+fn configured_policy_seeds_once_and_a_runtime_policy_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let configured = Policy {
+        mode: ApprovalMode::FreeOnly,
+        daily_budget_msat: None,
+    };
+    let runtime = Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: Some(20_000),
+    };
+    {
+        let ledger = Ledger::open(dir.path()).unwrap();
+        assert!(ledger.seed_policy(&configured).unwrap());
+        assert_eq!(ledger.policy().unwrap().mode, ApprovalMode::FreeOnly);
+        ledger.set_policy(&runtime).unwrap();
+    }
+    let ledger = Ledger::open(dir.path()).unwrap();
+    assert!(!ledger.seed_policy(&configured).unwrap());
+    let stored = ledger.policy().unwrap();
+    assert_eq!(stored.mode, ApprovalMode::Automatic);
+    assert_eq!(stored.daily_budget_msat, Some(20_000));
+}
+
+#[test]
+fn an_invalid_configured_policy_is_refused_without_storing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let invalid = Policy {
+        mode: ApprovalMode::Automatic,
+        daily_budget_msat: None,
+    };
+    assert!(ledger.seed_policy(&invalid).is_err());
+    assert!(ledger.seed_policy(&Policy::default()).unwrap());
+}
+
+#[test]
+fn a_restart_keeps_the_runtime_policy_and_its_remaining_daily_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = crate::now_ms();
+    {
+        let ledger = Ledger::open(dir.path()).unwrap();
+        assert!(ledger.seed_policy(&Policy::default()).unwrap());
+        ledger
+            .set_policy(&Policy {
+                mode: ApprovalMode::Automatic,
+                daily_budget_msat: Some(20_000),
+            })
+            .unwrap();
+        assert_eq!(ledger.available_budget(now).unwrap(), 20_000);
+    }
+    // Restart with the config file still saying free_only.
+    let ledger = Ledger::open(dir.path()).unwrap();
+    assert!(!ledger.seed_policy(&Policy::default()).unwrap());
+    let status = ledger.policy_status(now).unwrap();
+    assert_eq!(status["mode"], "automatic");
+    assert_eq!(status["remaining_daily_budget_msat"], 20_000);
+    assert_eq!(ledger.available_budget(now).unwrap(), 20_000);
+}
