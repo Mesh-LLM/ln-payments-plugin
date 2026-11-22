@@ -16,6 +16,11 @@ struct Network {
     sends: AtomicUsize,
     balances: AtomicUsize,
     slow_lookup: Mutex<Option<String>>,
+    /// Lookups of this hash hang once it has been looked up `.1` times.
+    hang_after: Mutex<Option<(String, usize)>>,
+    lookups: Mutex<BTreeMap<String, usize>>,
+    /// Records returned exactly as stored, direction and hash unadjusted.
+    raw: Mutex<BTreeMap<String, Transaction>>,
     fail_next_pay: std::sync::atomic::AtomicBool,
     /// The receive fee the fixture's seller wallet deducts from each payment.
     receive_fee: std::sync::atomic::AtomicU64,
@@ -116,6 +121,22 @@ impl WalletProvider for Wallet {
         let slow = self.0.slow_lookup.lock().unwrap().as_deref() == Some(hash);
         if slow {
             std::future::pending::<()>().await;
+        }
+        let seen = {
+            let mut lookups = self.0.lookups.lock().unwrap();
+            let seen = lookups.entry(hash.to_owned()).or_default();
+            *seen += 1;
+            *seen
+        };
+        let hangs = matches!(
+            &*self.0.hang_after.lock().unwrap(),
+            Some((target, after)) if target == hash && seen > *after
+        );
+        if hangs {
+            std::future::pending::<()>().await;
+        }
+        if let Some(record) = self.0.raw.lock().unwrap().get(hash) {
+            return Ok(Some(record.clone()));
         }
         Ok(self
             .0
@@ -1404,6 +1425,34 @@ async fn received_settlement_reads_only_a_covering_succeeded_inbound_record() {
             .unwrap()
             .insert(invoice.payment_hash.clone(), t);
     };
+    // A record of another payment, or an outgoing one, is never mapped.
+    let mut other = record(995, 5, PaymentStatus::Succeeded);
+    other.payment_hash = Some("00".repeat(32));
+    f.network
+        .raw
+        .lock()
+        .unwrap()
+        .insert(invoice.payment_hash.clone(), other);
+    assert!(
+        service
+            .received_settlement(&invoice, deadline)
+            .await
+            .is_none()
+    );
+    let mut outgoing = record(995, 5, PaymentStatus::Succeeded);
+    outgoing.inbound = false;
+    f.network
+        .raw
+        .lock()
+        .unwrap()
+        .insert(invoice.payment_hash.clone(), outgoing);
+    assert!(
+        service
+            .received_settlement(&invoice, deadline)
+            .await
+            .is_none()
+    );
+    f.network.raw.lock().unwrap().clear();
     put(record(995, 5, PaymentStatus::Pending));
     assert!(
         service
@@ -1437,4 +1486,60 @@ async fn received_settlement_reads_only_a_covering_succeeded_inbound_record() {
             .is_none()
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+/// The wallet answers `serve_recover`'s refresh, then hangs on the final
+/// settlement's own lookup: Paid still replies, and the one settlement event
+/// goes out without wallet numbers; a repeated Paid adds nothing.
+#[tokio::test]
+async fn final_settlement_event_survives_a_wallet_that_hangs_on_its_lookup() {
+    let f = Fixture::new();
+    f.prepare().await;
+    f.seller.gate(&gate("x", "buyer")).unwrap();
+    let mut events = f.seller.lifecycle.capture();
+    let (_, bill) = f
+        .seller
+        .terminal(&terminal(
+            "x",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let paid = f.buyer.channel("seller", bill).await.unwrap().remove(0);
+    let duplicate: Message = serde_json::from_value(serde_json::to_value(&paid).unwrap()).unwrap();
+    let Message::Paid { id } = &paid else {
+        unreachable!()
+    };
+    let hash = f
+        .seller
+        .service
+        .ledger
+        .metered_invoice(
+            id,
+            mesh_llm_payments::ledger::metered_invoices::MeteredInvoiceKind::Final,
+        )
+        .unwrap()
+        .unwrap()
+        .invoice
+        .payment_hash;
+    let seen = *f.network.lookups.lock().unwrap().get(&hash).unwrap_or(&0);
+    *f.network.hang_after.lock().unwrap() = Some((hash, seen + 1));
+    let reply = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        f.seller.channel("buyer", paid),
+    )
+    .await
+    .expect("Paid reply is not stalled by the wallet");
+    assert!(reply.is_ok());
+    f.seller.channel("buyer", duplicate).await.unwrap();
+    let seller: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    let settlements: Vec<_> = seller
+        .iter()
+        .filter(|e| e.phase == "output_settlement_observed")
+        .collect();
+    assert_eq!(settlements.len(), 1);
+    assert_eq!(settlements[0].credited_msat, None);
+    assert_eq!(settlements[0].fee_msat, None);
+    assert_eq!(settlements[0].preimage, None);
 }
