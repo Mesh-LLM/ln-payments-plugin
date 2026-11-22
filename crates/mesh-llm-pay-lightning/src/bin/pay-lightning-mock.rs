@@ -99,6 +99,7 @@ impl WalletProvider for Offline {
             status_msg: None,
             created_at_ms: mesh_llm_wallet::now_ms(),
             settled_at_ms: Some(mesh_llm_wallet::now_ms()),
+            preimage: None,
         };
         let temporary = self.0.join(format!(".{}", uuid::Uuid::new_v4()));
         std::fs::write(
