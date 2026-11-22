@@ -40,6 +40,10 @@ use std::{
 };
 
 pub const CHANNEL: &str = "pay.ln.v1";
+
+/// How long the provider waits for the wallet's record of a settled final
+/// invoice before emitting its settlement event without the wallet's numbers.
+const FINAL_SETTLEMENT_LOOKUP: std::time::Duration = std::time::Duration::from_secs(1);
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Message {
@@ -193,6 +197,22 @@ impl Engine {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// Emit the provider's final settlement for `id`. `serve_recover` kept no
+    /// transaction, so read the wallet's numbers for the event, only while it
+    /// is still to be emitted and bounded so a slow wallet never delays the
+    /// reply; without them the event goes out as it did before.
+    async fn observe_final_received(&self, id: &str, invoice: &Invoice) {
+        if !self.lifecycle.provider_final_open(id) {
+            return;
+        }
+        let settled = self
+            .service
+            .received_settlement(invoice, FINAL_SETTLEMENT_LOOKUP)
+            .await
+            .unwrap_or_default();
+        self.lifecycle.provider_final_received(id, invoice, settled);
+    }
+
     pub async fn channel(&self, peer: &str, message: Message) -> Result<Vec<Message>> {
         self.known.lock().unwrap().insert(peer.into());
         match message {
@@ -230,7 +250,7 @@ impl Engine {
                     && bill.settled
                     && let Some(invoice) = &bill.invoice
                 {
-                    self.lifecycle.provider_final_received(&id, invoice);
+                    self.observe_final_received(&id, invoice).await;
                 }
                 // A paid final may clear the strike limit while a prepared
                 // ticket is waiting at ingress, not only when a ticket readies.

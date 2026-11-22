@@ -502,12 +502,18 @@ impl Lifecycle {
         ]);
     }
 
-    /// Provider: the final invoice for `id` was received.
-    pub fn provider_final_received(&self, id: &str, invoice: &Invoice) {
+    /// Provider: whether the final settlement for `id` is still to be observed.
+    pub fn provider_final_open(&self, id: &str) -> bool {
+        self.open.lock().unwrap().contains_key(id)
+    }
+
+    /// Provider: the final invoice for `id` was received; `settled` is what
+    /// the receiving wallet reported for it, empty when it said nothing.
+    pub fn provider_final_received(&self, id: &str, invoice: &Invoice, settled: SettledReceived) {
         let Some(exchange) = self.open.lock().unwrap().remove(id) else {
             return;
         };
-        self.emit([exchange.received(1, invoice, &SettledReceived::default())]);
+        self.emit([exchange.received(1, invoice, &settled)]);
     }
 
     /// Either side: `id` closed without usage; nothing more is observed.

@@ -17,13 +17,23 @@ struct Network {
     balances: AtomicUsize,
     slow_lookup: Mutex<Option<String>>,
     fail_next_pay: std::sync::atomic::AtomicBool,
+    /// The receive fee the fixture's seller wallet deducts from each payment.
+    receive_fee: std::sync::atomic::AtomicU64,
 }
 struct Wallet(Arc<Network>, bool);
+/// The fixture's dummy preimage for invoice `number`; never a real secret.
+fn fixture_preimage(number: u8) -> [u8; 32] {
+    [number; 32]
+}
+fn fixture_hash(number: u8) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(fixture_preimage(number)).into()
+}
 pub(crate) fn invoice(number: u8, amount: u64) -> Invoice {
     let secret = SecretKey::from_slice(&[7; 32]).unwrap();
     let raw = InvoiceBuilder::new(Currency::Bitcoin)
         .description("offline fixture".into())
-        .payment_hash(PaymentHash([number; 32]))
+        .payment_hash(PaymentHash(fixture_hash(number)))
         .payment_secret(PaymentSecret([42; 32]))
         .current_timestamp()
         .expiry_time(std::time::Duration::from_secs(3600))
@@ -89,6 +99,12 @@ impl WalletProvider for Wallet {
         };
         let mut incoming = payment.clone();
         incoming.inbound = true;
+        let fee = self.0.receive_fee.load(Ordering::SeqCst);
+        incoming.amount_msat -= fee;
+        incoming.fee_msat = fee;
+        incoming.preimage = (0..=u8::MAX)
+            .find(|number| hex::encode(fixture_hash(*number)) == invoice.payment_hash)
+            .map(|number| hex::encode(fixture_preimage(number)));
         self.0
             .received
             .lock()
@@ -1281,4 +1297,144 @@ async fn abandonment_cannot_replace_an_accepted_bill() {
             .await
             .is_err()
     );
+}
+
+/// A warm peer pays no deposit, so its only provider settlement is the final:
+/// it must carry the receiving wallet's numbers and a verified preimage.
+#[tokio::test]
+async fn warm_final_settlement_carries_the_wallet_numbers_and_preimage() {
+    use sha2::Digest;
+    let f = Fixture::new();
+    f.network.receive_fee.store(5, Ordering::SeqCst);
+    f.prepare().await;
+    f.seller.gate(&gate("cold", "buyer")).unwrap();
+    let (_, settlement) = f
+        .seller
+        .terminal(&terminal(
+            "cold",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let paid = f
+        .buyer
+        .channel("seller", settlement)
+        .await
+        .unwrap()
+        .remove(0);
+    let ready = f.seller.channel("buyer", paid).await.unwrap();
+    let warm = ready
+        .into_iter()
+        .find(|m| matches!(m, Message::Admission { .. }))
+        .unwrap();
+    let paid = f.buyer.channel("seller", warm).await.unwrap().remove(0);
+    f.seller.channel("buyer", paid).await.unwrap();
+
+    let mut events = f.seller.lifecycle.capture();
+    f.seller.gate(&gate("warm", "buyer")).unwrap();
+    let (_, bill) = f
+        .seller
+        .terminal(&terminal(
+            "warm",
+            json!({"prompt_tokens":2000,"completion_tokens":1000}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let paid = f.buyer.channel("seller", bill).await.unwrap().remove(0);
+    let duplicate: Message = serde_json::from_value(serde_json::to_value(&paid).unwrap()).unwrap();
+    f.seller.channel("buyer", paid).await.unwrap();
+    f.seller.channel("buyer", duplicate).await.unwrap();
+
+    let seller: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    let phases: Vec<_> = seller.iter().map(|e| e.phase).collect();
+    assert_eq!(
+        phases,
+        [
+            "delivered",
+            "output_invoice_issued",
+            "output_settlement_observed"
+        ],
+        "a warm exchange has no deposit settlement, and a repeated Paid adds none"
+    );
+    let event = &seller[2];
+    assert_eq!(event.amount_msat, 3000);
+    assert_eq!(event.credited_msat, Some(2995));
+    assert_eq!(event.fee_msat, Some(5));
+    let preimage = event.preimage.clone().expect("preimage");
+    assert_eq!(
+        hex::encode(sha2::Sha256::digest(hex::decode(preimage).unwrap())),
+        event.payment_hash.clone().unwrap()
+    );
+}
+
+/// The wallet's record is read only when it is a succeeded, inbound payment
+/// that covers the invoice, and a wallet that hangs cannot hold the caller.
+#[tokio::test]
+async fn received_settlement_reads_only_a_covering_succeeded_inbound_record() {
+    let f = Fixture::new();
+    let service = &f.seller.service;
+    let deadline = std::time::Duration::from_millis(200);
+    let invoice = invoice(9, 1000);
+    // No record.
+    assert!(
+        service
+            .received_settlement(&invoice, deadline)
+            .await
+            .is_none()
+    );
+    let record = |amount, fee, status| Transaction {
+        id: invoice.payment_hash.clone(),
+        payment_hash: Some(invoice.payment_hash.clone()),
+        inbound: true,
+        amount_msat: amount,
+        fee_msat: fee,
+        status,
+        claiming: false,
+        status_msg: None,
+        created_at_ms: 0,
+        settled_at_ms: None,
+        preimage: None,
+    };
+    let put = |t: Transaction| {
+        f.network
+            .received
+            .lock()
+            .unwrap()
+            .insert(invoice.payment_hash.clone(), t);
+    };
+    put(record(995, 5, PaymentStatus::Pending));
+    assert!(
+        service
+            .received_settlement(&invoice, deadline)
+            .await
+            .is_none()
+    );
+    put(record(900, 5, PaymentStatus::Succeeded));
+    assert!(
+        service
+            .received_settlement(&invoice, deadline)
+            .await
+            .is_none()
+    );
+    put(record(995, 5, PaymentStatus::Succeeded));
+    let settled = service
+        .received_settlement(&invoice, deadline)
+        .await
+        .expect("covering record");
+    assert_eq!(
+        (settled.credited_msat, settled.fee_msat),
+        (Some(995), Some(5))
+    );
+    // A wallet that never answers returns at the deadline, not never.
+    *f.network.slow_lookup.lock().unwrap() = Some(invoice.payment_hash.clone());
+    let started = std::time::Instant::now();
+    assert!(
+        service
+            .received_settlement(&invoice, deadline)
+            .await
+            .is_none()
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }

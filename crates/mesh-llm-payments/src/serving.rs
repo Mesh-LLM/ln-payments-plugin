@@ -187,6 +187,28 @@ impl PaymentService {
         Ok(payment)
     }
 
+    /// The receiving wallet's record of `invoice`, for an observer that wants
+    /// the wallet's numbers without waiting: `None` unless the wallet answers
+    /// within `deadline` with a succeeded inbound payment of this invoice that
+    /// covers it. Records nothing and never errors; it only reads.
+    pub async fn received_settlement(
+        &self,
+        invoice: &Invoice,
+        deadline: Duration,
+    ) -> Option<SettledReceived> {
+        let amount = invoice.amount_msat?;
+        let payment = tokio::time::timeout(deadline, async {
+            self.wallet().await?.lookup(&invoice.payment_hash).await
+        })
+        .await
+        .ok()?
+        .ok()??;
+        crate::service::validate_payment_update(&payment, &invoice.payment_hash, true).ok()?;
+        (payment.status == PaymentStatus::Succeeded
+            && crate::service::incoming_covers(&payment, amount))
+        .then(|| settled(&payment))
+    }
+
     /// A confirmed cold deposit establishes standing immediately. Subsequent
     /// work overlaps final settlement, bounded separately by unpaid finals.
     async fn record_received(&self, hash: &str) -> Result<()> {

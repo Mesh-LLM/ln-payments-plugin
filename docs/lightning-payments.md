@@ -933,11 +933,13 @@ SHA-256 equals `payment_hash`; any other value is dropped. On a payer event it
 proves the payment completed: the payer holds it only once the payee released
 it. On a provider event it is the receiving wallet's own value, which the
 payee had before anyone paid, so it proves nothing beyond the wallet's report.
-Only the provider's deposit settlement (`input_settlement_observed`) carries it:
-the final settlement is observed from the stored bill, without the wallet's
-transaction, so that event carries no `preimage` (nor `credited_msat` or
-`fee_msat`). It is omitted when the wallet or the `payments.v1` provider did not report one,
-and is covered by `event_ref`.
+The provider's final settlement (`output_settlement_observed`) carries the
+same members as its deposit settlement: it is observed from the stored bill,
+and the provider then reads the wallet's record of the final invoice (bounded
+to one second). When the wallet does not answer in time or reports no
+succeeded payment of that invoice, the event carries none of them. Each is
+omitted when the wallet or the `payments.v1` provider did not report it, and
+is covered by `event_ref`.
 Terms acceptance is `payer_asserted` (amount retains the legacy local
 `max_total_msat` metadata; it is not an enforced request spending cap);
 invoice issuance is `provider_asserted` as observed by the payer, not
