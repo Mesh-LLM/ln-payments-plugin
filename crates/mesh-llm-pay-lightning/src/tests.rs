@@ -105,7 +105,7 @@ impl WalletProvider for Wallet {
         let mut incoming = payment.clone();
         incoming.inbound = true;
         let fee = self.0.receive_fee.load(Ordering::SeqCst);
-        incoming.amount_msat -= fee;
+        incoming.amount_msat = incoming.amount_msat.saturating_sub(fee);
         incoming.fee_msat = fee;
         incoming.preimage = (0..=u8::MAX)
             .find(|number| hex::encode(fixture_hash(*number)) == invoice.payment_hash)
