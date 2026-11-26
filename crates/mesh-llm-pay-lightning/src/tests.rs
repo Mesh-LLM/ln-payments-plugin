@@ -1345,13 +1345,9 @@ fn lab_price() -> Pricing {
 fn assert_rate_refused(decision: &OpenAiExchangeDecision, header: &str) {
     assert_eq!(decision.decision, Decision::Deny);
     assert_eq!(decision.status, Some(403));
-    assert!(
-        decision
-            .reason
-            .as_deref()
-            .unwrap()
-            .starts_with("Not paid: ")
-    );
+    let reason = decision.reason.as_deref().unwrap();
+    assert!(reason.starts_with("Not paid: ") || reason.starts_with("Not sent: "));
+    assert_eq!(reason.matches(". ").count(), 0, "one sentence: {reason}");
     let (name, value) = &decision.response_headers[0];
     assert_eq!(name, header);
     assert!(value.len() <= 1024);
@@ -1393,7 +1389,7 @@ async fn rates_over_the_ceiling_are_refused_at_once_before_any_deposit() {
     assert_eq!(
         decision.reason.as_deref().unwrap(),
         format!(
-            "Not paid: seller seller's price for model (50,000,000 msat per million input tokens, 50,000,000 per million output) is above the default ceiling ({} and {}). You have not set your own. Raise it, or set a price for this model, to pay it.",
+            "Not paid: seller seller's price for model (50,000,000 msat per million input tokens, 50,000,000 per million output) is above the default ceiling ({} and {}), which you have not set; raise it, or set a price for this model, to pay it.",
             grouped(input),
             grouped(output)
         )
@@ -1427,7 +1423,7 @@ async fn a_configured_ceiling_refuses_one_msat_over_it() {
         decision
             .reason
             .unwrap()
-            .contains("above your ceiling (1,000 and 3,000).")
+            .contains("above your ceiling (1,000 and 3,000);")
     );
 }
 
@@ -1469,8 +1465,9 @@ async fn a_fresh_connection_clears_the_sellers_refusals() {
     let (f, admission) = quoted_unconfigured(lab_price()).await;
     set_ceiling(&f, Some(1_000), Some(1_000));
     assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_some());
+    // Cleared on disconnect, so the next request reaches `peer_up` and quotes.
     f.buyer.peer_down("seller");
-    f.buyer.peer_up("seller").await.unwrap();
     assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_none());
 }
 
@@ -1522,6 +1519,8 @@ async fn a_ready_ticket_is_not_dispatched_above_a_lowered_ceiling() {
         .await
         .unwrap();
     assert_rate_refused(&decision, &f.buyer.header);
+    // Its deposit was paid: the request is held unsent, not "not paid".
+    assert!(decision.reason.unwrap().starts_with("Not sent: "));
     // The ticket is kept: a raised ceiling dispatches through it.
     set_ceiling(&f, Some(1_000_000), Some(1_000_000));
     let decision = f
@@ -1536,4 +1535,101 @@ async fn a_ready_ticket_is_not_dispatched_above_a_lowered_ceiling() {
         .unwrap();
     assert_ne!(decision.decision, Decision::Deny);
     assert_eq!(f.network.sends.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn rates_over_the_ceiling_are_refused_at_once_even_with_a_short_discount() {
+    let mut f = Fixture::new();
+    // The model's entry wants a 50% cache discount; the seller offers none and
+    // charges more than the entry allows: the rate refusal still answers at once.
+    f.buyer.buying.insert(
+        "model".into(),
+        Pricing {
+            input_msat_per_million: 10,
+            ..price()
+        },
+    );
+    f.seller
+        .service
+        .ledger
+        .set_pricing(
+            "model",
+            Some(&Pricing {
+                cache_discount_percent: 0,
+                ..price()
+            }),
+        )
+        .unwrap();
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_some());
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn default_is_named_only_for_a_limit_the_payer_never_set() {
+    let Some((_, default_output)) = DEFAULT_RATE_CEILING else {
+        return;
+    };
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    // Input set by the payer, output left at the default; only output exceeded.
+    set_ceiling(&f, Some(10), None);
+    let over_output = Pricing {
+        input_msat_per_million: 5,
+        output_msat_per_million: default_output + 1,
+        cache_discount_percent: 0,
+    };
+    let ceiling = f
+        .buyer
+        .exceeded_ceiling("model", &over_output)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(ceiling.source, CeilingSource::Default));
+    // Exceeding the limit the payer set names it as theirs.
+    let over_input = Pricing {
+        input_msat_per_million: 11,
+        ..over_output
+    };
+    let ceiling = f
+        .buyer
+        .exceeded_ceiling("model", &over_input)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(ceiling.source, CeilingSource::Policy));
+}
+
+#[test]
+fn refusal_header_is_printable_ascii_and_keeps_the_sentence() {
+    let f = Fixture::new();
+    let ceiling = || Ceiling {
+        input: 1,
+        output: 1,
+        source: CeilingSource::Policy,
+    };
+    // A non-ASCII model name is escaped, not dropped.
+    let decision = f
+        .buyer
+        .rate_refused("seller", "模型", &price(), ceiling(), false);
+    let value = &decision.response_headers[0].1;
+    assert!(value.bytes().all(|b| (32..127).contains(&b)));
+    let terms: Value = serde_json::from_str(value).unwrap();
+    assert_eq!(terms["model"], "模型");
+    assert_eq!(terms["message"].as_str(), decision.reason.as_deref());
+    // A long model name drops the repeated terms before the sentence.
+    let long = "m".repeat(500);
+    let decision = f
+        .buyer
+        .rate_refused("seller", &long, &price(), ceiling(), false);
+    let value = &decision.response_headers[0].1;
+    assert!(value.len() <= 1024);
+    let terms: Value = serde_json::from_str(value).unwrap();
+    assert_eq!(terms["refused"], "rate_above_ceiling");
+    assert!(terms["message"].as_str().unwrap().contains(&long));
+    assert!(terms.get("pricing").is_none());
 }
