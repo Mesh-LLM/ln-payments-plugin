@@ -21,8 +21,18 @@ pub(crate) fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
     hook.headers = vec![header.into()];
     hook.deadline_ms = 30_000;
     use mesh_llm_plugin::{
-        config_boolean, config_path, config_schema, config_setting, config_string,
+        config_boolean, config_integer, config_path, config_schema, config_setting, config_string,
     };
+    // The rate ceiling `automatic` mode pays, shown on the host's config
+    // screen with the shipped default; unset settings keep the policy's own.
+    let ceiling = |name: &str, default: Option<u64>| {
+        let setting = config_setting(name, config_integer());
+        match default {
+            Some(value) => setting.default_value(&value),
+            None => setting,
+        }
+    };
+    let default_ceiling = mesh_llm_payments_types::control::DEFAULT_RATE_CEILING;
     plugin_manifest()
         .item(
             config_schema("pay-lightning")
@@ -31,7 +41,15 @@ pub(crate) fn manifest(header: &str) -> mesh_llm_plugin::proto::PluginManifest {
                 .setting(
                     config_setting("allow_wallet_provisioning", config_boolean())
                         .default_value(&true),
-                ),
+                )
+                .setting(ceiling(
+                    "max_input_msat_per_million",
+                    default_ceiling.map(|(input, _)| input),
+                ))
+                .setting(ceiling(
+                    "max_output_msat_per_million",
+                    default_ceiling.map(|(_, output)| output),
+                )),
         )
         .item(hook)
         .item(mesh_channel(CHANNEL))
@@ -380,6 +398,13 @@ async fn run_with_setup(
                     if let Some(decision) = engine.buyer_refusal(peer, model).await {
                         return Ok(decision);
                     }
+                    // Rates already refused above the ceiling: answer at once,
+                    // before any quote or deposit.
+                    if let Some(decision) = engine.rate_refusal(peer, model).map_err(|error| {
+                        mesh_llm_plugin::PluginError::internal(error.to_string())
+                    })? {
+                        return Ok(decision);
+                    }
                     let result = buyer_dispatch(&engine, peer, &event, &mut context).await;
                     return result.map_err(|error| {
                         mesh_llm_plugin::PluginError::internal(error.to_string())
@@ -581,6 +606,11 @@ mod tests {
         );
         let hook = manifest.openai_exchange_hook.unwrap();
         assert!(hook.required && hook.admission && hook.metadata);
+        // The buyer's refusal terms travel in this one granted header.
+        assert_eq!(
+            hook.headers,
+            vec!["x-plugin-7061792d6c696768746e696e67-pay-terms"]
+        );
         assert!(!hook.request_body && !hook.response_body && !hook.delegate_signing_key);
         assert_eq!(
             hook.phases,

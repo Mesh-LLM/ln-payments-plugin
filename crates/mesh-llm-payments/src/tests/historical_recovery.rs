@@ -9,6 +9,7 @@ fn main_ledger(path: &std::path::Path, state: &str) -> Result<Invoice> {
     let policy = Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(20_000),
+        ..Default::default()
     };
     connection.execute(
         "INSERT INTO settings VALUES ('policy',?1)",

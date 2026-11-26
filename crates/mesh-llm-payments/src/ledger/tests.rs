@@ -28,6 +28,7 @@ fn approvals_do_not_reserve_the_daily_budget() {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(1000),
+            ..Default::default()
         })
         .unwrap();
     ledger.propose(&terms("one", 700)).unwrap();
@@ -49,7 +50,8 @@ fn approvals_cannot_change_terms_or_revive_rejected_requests() {
         ledger
             .set_policy(&Policy {
                 mode: ApprovalMode::Automatic,
-                daily_budget_msat: None
+                daily_budget_msat: None,
+                ..Default::default()
             })
             .is_err()
     );
@@ -93,6 +95,7 @@ fn single_policy_controls_eligibility() -> Result<()> {
     ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(1000),
+        ..Default::default()
     })?;
     ledger.approve("disabled", 1)?;
     let status = ledger.policy_status(1)?;

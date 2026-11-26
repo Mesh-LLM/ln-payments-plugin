@@ -240,6 +240,7 @@ async fn lost_payment_response_recovers_after_restart_without_double_spend() {
             .set_policy(&Policy {
                 mode: ApprovalMode::Automatic,
                 daily_budget_msat: Some(100_000),
+                ..Default::default()
             })
             .unwrap();
         service.ledger.propose(&request).unwrap();
@@ -266,6 +267,7 @@ async fn a_fee_above_the_headroom_still_counts_against_the_daily_budget() {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(10_000),
+            ..Default::default()
         })
         .unwrap();
     service.ledger.propose(&terms("one", 1000)).unwrap();
@@ -295,6 +297,7 @@ async fn a_fresh_charge_pays_without_a_lookup() {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(1000),
+            ..Default::default()
         })
         .unwrap();
     service
@@ -319,6 +322,7 @@ async fn output_payment_uses_the_original_authorization_and_actual_fees() {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(1000),
+            ..Default::default()
         })
         .unwrap();
     service
@@ -349,6 +353,7 @@ fn duplicate_segments_and_hashes_cannot_change_the_debit() {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000),
+            ..Default::default()
         })
         .unwrap();
     ledger.propose(&terms("one", 1000)).unwrap();
@@ -414,6 +419,7 @@ async fn one_policy_command_enables_paid_use_and_free_only_stops_new_work() -> R
             value: Some(Policy {
                 mode: ApprovalMode::Automatic,
                 daily_budget_msat: Some(1000),
+                ..Default::default()
             }),
         })
         .await?;

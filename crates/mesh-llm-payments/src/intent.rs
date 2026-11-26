@@ -8,11 +8,12 @@ impl Ledger {
     pub fn payment_intent(&self) -> Result<PaymentIntent> {
         let policy = self.policy()?;
         policy.validate()?;
+        let (max_input_msat_per_million, max_output_msat_per_million) = policy.rate_ceiling();
         Ok(match policy.mode {
             crate::ledger::ApprovalMode::FreeOnly => PaymentIntent::FreeOnly,
             crate::ledger::ApprovalMode::Automatic => PaymentIntent::AllowPaid {
-                max_input_msat_per_million: u64::MAX,
-                max_output_msat_per_million: u64::MAX,
+                max_input_msat_per_million,
+                max_output_msat_per_million,
                 max_total_msat: policy.daily_budget_msat.unwrap_or(0),
             },
         })
@@ -64,6 +65,7 @@ mod tests {
             ledger.set_policy(&crate::ledger::Policy {
                 mode: crate::ledger::ApprovalMode::Automatic,
                 daily_budget_msat: Some(4000),
+                ..Default::default()
             })?;
         }
         let ledger = Ledger::open(directory.path())?;
@@ -81,6 +83,84 @@ mod tests {
             serde_json::from_str::<PaymentIntent>(r#"{"mode":"allow_paid","max_total_msat":1000}"#)
                 .is_err()
         );
+        Ok(())
+    }
+
+    fn priced(input: u64, output: u64) -> Pricing {
+        Pricing {
+            input_msat_per_million: input,
+            output_msat_per_million: output,
+            cache_discount_percent: 0,
+        }
+    }
+
+    fn automatic(input: Option<u64>, output: Option<u64>) -> crate::ledger::Policy {
+        crate::ledger::Policy {
+            mode: crate::ledger::ApprovalMode::Automatic,
+            daily_budget_msat: Some(500_000),
+            max_input_msat_per_million: input,
+            max_output_msat_per_million: output,
+        }
+    }
+
+    #[test]
+    fn configured_ceiling_bounds_rates_under_at_and_over() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let ledger = Ledger::open(directory.path())?;
+        ledger.set_policy(&automatic(Some(1_000), Some(3_000)))?;
+        let intent = ledger.payment_intent()?;
+        assert!(intent.permits(&priced(999, 2_999)));
+        assert!(intent.permits(&priced(1_000, 3_000)));
+        assert!(!intent.permits(&priced(1_001, 3_000)));
+        assert!(!intent.permits(&priced(1_000, 3_001)));
+        // The lab overpay: 50,000,000 msat per million each way.
+        assert!(!intent.permits(&priced(50_000_000, 50_000_000)));
+        Ok(())
+    }
+
+    #[test]
+    fn unset_ceiling_uses_the_shipped_default() -> Result<()> {
+        use mesh_llm_payments_types::control::DEFAULT_RATE_CEILING;
+        let directory = tempfile::tempdir()?;
+        let ledger = Ledger::open(directory.path())?;
+        ledger.set_policy(&automatic(None, None))?;
+        let intent = ledger.payment_intent()?;
+        match DEFAULT_RATE_CEILING {
+            Some((input, output)) => {
+                assert!(intent.permits(&priced(input, output)));
+                assert!(!intent.permits(&priced(input + 1, output)));
+                assert!(!intent.permits(&priced(input, output + 1)));
+            }
+            None => assert!(intent.permits(&priced(u64::MAX, u64::MAX))),
+        }
+        // One side set: the other keeps the default.
+        ledger.set_policy(&automatic(Some(10), None))?;
+        let (_, default_output) = DEFAULT_RATE_CEILING.unwrap_or((u64::MAX, u64::MAX));
+        let intent = ledger.payment_intent()?;
+        assert!(intent.permits(&priced(10, default_output)));
+        assert!(!intent.permits(&priced(11, 1)));
+        Ok(())
+    }
+
+    #[test]
+    fn ceiling_round_trips_and_older_policies_still_load() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let ledger = Ledger::open(directory.path())?;
+        ledger.set_policy(&automatic(Some(7), Some(9)))?;
+        let read = ledger.policy()?;
+        assert_eq!(read.max_input_msat_per_million, Some(7));
+        assert_eq!(read.max_output_msat_per_million, Some(9));
+        let status = ledger.policy_status(1)?;
+        assert_eq!(status["max_input_msat_per_million"], 7);
+        assert_eq!(status["rate_ceiling_msat_per_million"]["output"], 9);
+        // A policy stored before the ceiling existed has no ceiling fields.
+        let old: crate::ledger::Policy =
+            serde_json::from_str(r#"{"mode":"automatic","daily_budget_msat":500000}"#)?;
+        assert_eq!(old.max_input_msat_per_million, None);
+        assert!(serde_json::to_string(&old)?.find("max_").is_none());
+        assert!(automatic(Some(0), None).validate().is_err());
+        assert!(automatic(None, Some(0)).validate().is_err());
+        assert!(ledger.set_policy(&automatic(Some(0), None)).is_err());
         Ok(())
     }
 }

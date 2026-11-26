@@ -17,6 +17,7 @@ async fn uncertain_charge(
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(BUDGET),
+        ..Default::default()
     })?;
     service.await_authorization(&terms("one", 1000)).await?;
     assert!(service.pay_charge(charge).await.is_err());
@@ -77,6 +78,7 @@ async fn expired_invoice_with_no_payment_fails_and_releases() -> Result<()> {
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(BUDGET),
+        ..Default::default()
     })?;
     service.await_authorization(&terms("one", 1000)).await?;
     let mut charge = charge("one", 0, 1, 100, 200);

@@ -104,6 +104,11 @@ pub struct Engine {
     buyer_ready: std::sync::Mutex<BTreeSet<(String, String)>>,
     /// The ready admission each `buyer_ready` entry stands for.
     ready_ids: std::sync::Mutex<BTreeMap<(String, String), String>>,
+    /// Seller rates refused as above this payer's rate ceiling, by seller and
+    /// model. A request for the pair is refused at once while the current
+    /// ceiling still refuses them; a raised ceiling drops the entry and quotes
+    /// the seller again, and a fresh connection to the seller clears its entries.
+    refused: std::sync::Mutex<BTreeMap<(String, String), Pricing>>,
     /// `payment.lifecycle.v1` publisher for the other plugins on this node.
     pub lifecycle: lifecycle::Lifecycle,
     changed: tokio::sync::Notify,
@@ -131,6 +136,7 @@ impl Engine {
             requote: Default::default(),
             buyer_ready: Default::default(),
             ready_ids: Default::default(),
+            refused: Default::default(),
             lifecycle: Default::default(),
             changed: Default::default(),
             receipt_schedule: Default::default(),
@@ -429,16 +435,15 @@ impl Engine {
             .await;
         matches!(budget.intent, PaymentIntent::AllowPaid { .. }) && budget.available_msat > 0
     }
-    /// The most one admission with `peer` may cost, or why it is refused. A
-    /// configured ceiling for the model bounds the seller's rates; otherwise
-    /// the policy's intent does (it permits any rate, bounded by the budget).
+    /// The most one admission with `peer` may cost, or why it is refused. The
+    /// seller's rates are bounded by the model's configured ceiling when there
+    /// is one, else by the spending policy's rate ceiling. Rates above it are
+    /// recorded so the waiting request, and later ones, are refused at once.
     async fn buyer_cap(&self, peer: &str, model: &str, pricing: &Pricing) -> Result<u64> {
         ensure!(self.buyer_enabled(peer).await, "seller not authorized");
         if let Some(ceiling) = self.buying.get(model) {
             ensure!(
-                pricing.input_msat_per_million <= ceiling.input_msat_per_million
-                    && pricing.output_msat_per_million <= ceiling.output_msat_per_million
-                    && pricing.cache_discount_percent >= ceiling.cache_discount_percent,
+                pricing.cache_discount_percent >= ceiling.cache_discount_percent,
                 "seller rates exceed authorized ceiling"
             );
         }
@@ -451,10 +456,14 @@ impl Engine {
         let PaymentIntent::AllowPaid { max_total_msat, .. } = budget.intent else {
             anyhow::bail!("paid inference is disabled by free-only policy");
         };
-        ensure!(
-            budget.intent.permits(pricing),
-            "seller rates exceed the spending policy"
-        );
+        pricing.validate().context("invalid seller pricing")?;
+        let key = (peer.to_owned(), model.to_owned());
+        if let Some(ceiling) = self.exceeded_ceiling(model, pricing)? {
+            self.refused.lock().unwrap().insert(key, pricing.clone());
+            self.changed.notify_waiters();
+            anyhow::bail!("{}", refusal_sentence(peer, model, pricing, &ceiling));
+        }
+        self.refused.lock().unwrap().remove(&key);
         Ok(if self.cap_msat > 0 {
             self.cap_msat.min(max_total_msat)
         } else {
@@ -477,6 +486,11 @@ impl Engine {
             return Ok(vec![]);
         };
         self.requote.lock().unwrap().remove(peer);
+        // The seller quotes every model again on a fresh connection.
+        self.refused
+            .lock()
+            .unwrap()
+            .retain(|(seller, _), _| seller != peer);
         let mut messages = Vec::new();
         // Observe uncertain payments before asking the authenticated seller for stored outcomes.
         for terms in self.service.reconcile_buyer().await?.approved {
@@ -607,6 +621,108 @@ impl Engine {
         }
         Some(OpenAiExchangeDecision::default())
     }
+    /// The rate ceiling `pricing` exceeds for `model`, or `None` within it:
+    /// the operator's per-model `buy_prices` entry when there is one, else the
+    /// spending policy's ceiling (its own, or the shipped default).
+    fn exceeded_ceiling(&self, model: &str, pricing: &Pricing) -> Result<Option<Ceiling>> {
+        let ceiling = match self.buying.get(model) {
+            Some(price) => Ceiling {
+                input: price.input_msat_per_million,
+                output: price.output_msat_per_million,
+                source: CeilingSource::Model,
+            },
+            None => {
+                let policy = self.service.ledger.policy()?;
+                let (input, output) = policy.rate_ceiling();
+                let set = policy.max_input_msat_per_million.is_some()
+                    || policy.max_output_msat_per_million.is_some();
+                Ceiling {
+                    input,
+                    output,
+                    source: if set {
+                        CeilingSource::Policy
+                    } else {
+                        CeilingSource::Default
+                    },
+                }
+            }
+        };
+        Ok((pricing.input_msat_per_million > ceiling.input
+            || pricing.output_msat_per_million > ceiling.output)
+            .then_some(ceiling))
+    }
+    /// Buyer: refuse a request at once when `peer`'s rates for `model` were
+    /// refused and the current ceiling still refuses them. When the ceiling
+    /// now allows them, forget the refusal and quote the seller again.
+    pub fn rate_refusal(&self, peer: &str, model: &str) -> Result<Option<OpenAiExchangeDecision>> {
+        let key = (peer.to_owned(), model.to_owned());
+        let Some(pricing) = self.refused.lock().unwrap().get(&key).cloned() else {
+            return Ok(None);
+        };
+        if let Some(ceiling) = self.exceeded_ceiling(model, &pricing)? {
+            return Ok(Some(self.rate_refused(peer, model, &pricing, ceiling)));
+        }
+        self.refused.lock().unwrap().remove(&key);
+        self.requote.lock().unwrap().insert(peer.into());
+        Ok(None)
+    }
+    /// A ticket readied under an earlier, higher ceiling is not dispatched
+    /// above the current one; it stays ready for a later raise.
+    fn ready_refusal(&self, peer: &str, model: &str) -> Result<Option<OpenAiExchangeDecision>> {
+        let key = (peer.to_owned(), model.to_owned());
+        if !self.buyer_ready.lock().unwrap().contains(&key) {
+            return Ok(None);
+        }
+        let Some(id) = self.ready_ids.lock().unwrap().get(&key).cloned() else {
+            return Ok(None);
+        };
+        let Some(terms) = self.service.ledger.request_terms(&id)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .exceeded_ceiling(model, &terms.pricing)?
+            .map(|ceiling| self.rate_refused(peer, model, &terms.pricing, ceiling)))
+    }
+    /// The caller's answer for rates above the ceiling: 403, since paying
+    /// again cannot pass it, with the terms in this plugin's response header.
+    fn rate_refused(
+        &self,
+        peer: &str,
+        model: &str,
+        pricing: &Pricing,
+        ceiling: Ceiling,
+    ) -> OpenAiExchangeDecision {
+        let message = refusal_sentence(peer, model, pricing, &ceiling);
+        let mut terms = json!({
+            "channel": CHANNEL,
+            "refused": "rate_above_ceiling",
+            "model": model,
+            "pricing": pricing,
+            "ceiling": {
+                "input_msat_per_million": ceiling.input,
+                "output_msat_per_million": ceiling.output,
+                "source": ceiling.source,
+            },
+            "message": message,
+        });
+        // The host accepts a header value of at most 1024 printable ASCII bytes.
+        if terms.to_string().len() > 1024 {
+            terms.as_object_mut().unwrap().remove("message");
+        }
+        let terms = terms.to_string();
+        let printable = terms.len() <= 1024 && terms.bytes().all(|b| (32..127).contains(&b));
+        OpenAiExchangeDecision {
+            decision: Decision::Deny,
+            status: Some(403),
+            reason: (message.len() <= 1024).then_some(message),
+            response_headers: if printable {
+                vec![(self.header.clone(), terms)]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        }
+    }
     /// Only an authenticated seller's Ready permits dispatch, never Hello timing.
     pub async fn buyer_wait(
         &self,
@@ -622,6 +738,12 @@ impl Engine {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
+            if let Some(refusal) = self.rate_refusal(peer, model)? {
+                return Ok(refusal);
+            }
+            if let Some(refusal) = self.ready_refusal(peer, model)? {
+                return Ok(refusal);
+            }
             if self.buyer_ready.lock().unwrap().remove(&key) {
                 // The policy may have changed while this request waited for
                 // Ready: claim the ticket only if buying is still permitted.
@@ -737,6 +859,62 @@ impl Engine {
             Message::Abandoned { id }
         };
         Ok(Some((peer, message)))
+    }
+}
+
+/// The rate ceiling a seller's rates were checked against.
+struct Ceiling {
+    input: u64,
+    output: u64,
+    source: CeilingSource,
+}
+
+/// Where a rate ceiling comes from, so the refusal can say so.
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CeilingSource {
+    /// The operator's `buy_prices` entry for the model.
+    Model,
+    /// The spending policy's own ceiling.
+    Policy,
+    /// The shipped default: the payer set none.
+    Default,
+}
+
+/// `12345678` as `12,345,678`, the way the refusal and config screen show rates.
+fn grouped(n: u64) -> String {
+    if n == u64::MAX {
+        return "no limit".into();
+    }
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// One plain sentence for a payer whose ceiling refused a seller's rates.
+fn refusal_sentence(peer: &str, model: &str, pricing: &Pricing, ceiling: &Ceiling) -> String {
+    let price = format!(
+        "Not paid: seller {peer}'s price for {model} ({} msat per million input tokens, {} per million output)",
+        grouped(pricing.input_msat_per_million),
+        grouped(pricing.output_msat_per_million),
+    );
+    let limits = format!("{} and {}", grouped(ceiling.input), grouped(ceiling.output));
+    match ceiling.source {
+        CeilingSource::Default => format!(
+            "{price} is above the default ceiling ({limits}). You have not set your own. Raise it, or set a price for this model, to pay it."
+        ),
+        CeilingSource::Policy => format!(
+            "{price} is above your ceiling ({limits}). Raise it, or set a price for this model, to pay it."
+        ),
+        CeilingSource::Model => {
+            format!("{price} is above your price for this model ({limits}). Raise it to pay it.")
+        }
     }
 }
 

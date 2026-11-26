@@ -55,6 +55,16 @@ mesh-llm plugins call pay-lightning control --input \
 The default policy is `free_only`: a fresh install does not authorize spending.
 The daily budget is not a per-request limit.
 
+In `automatic` mode the payer also has a rate ceiling: it pays a seller only
+when its rates are at most 500,000 msat per million input tokens and 1,500,000
+per million output, unless the payer sets its own ceiling in the policy
+(`max_input_msat_per_million`, `max_output_msat_per_million`) or in the plugin
+settings of the same names, which the host's config screen shows with those
+defaults. A per-model `buy_prices` entry in `payment.json` replaces the ceiling
+for that model. A request routed to a seller above the ceiling is refused with
+HTTP 403 before any deposit, with one sentence naming the seller, the model,
+its price and the ceiling.
+
 ## Wallet and state
 
 Control commands use the running node's API (default port 3131). Add

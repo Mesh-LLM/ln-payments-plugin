@@ -178,6 +178,7 @@ fn automatic_terms(service: &PaymentService) -> Result<RequestTerms> {
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(1000),
+        ..Default::default()
     })?;
     Ok(terms("notified", 1000))
 }

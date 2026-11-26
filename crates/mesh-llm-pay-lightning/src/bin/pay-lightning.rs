@@ -18,6 +18,12 @@ struct Launch {
     /// Whether a ledger without a wallet pin may adopt (or provision) the
     /// bound wallet. Default true: that is what built-in payments did.
     allow_wallet_provisioning: Option<bool>,
+    /// The highest seller input and output rates, msat per million tokens,
+    /// that `automatic` mode pays. When set, they replace the config file
+    /// policy's ceiling at startup; unset, the policy's own (or the shipped
+    /// default) applies.
+    max_input_msat_per_million: Option<u64>,
+    max_output_msat_per_million: Option<u64>,
 }
 
 /// `~/.mesh-llm/payments`: where built-in payments kept the ledger and every
@@ -55,7 +61,7 @@ fn bound_settings(settings_json: &str) -> Result<mesh_llm_pay_lightning::BoundSe
     } else {
         serde_json::from_str(settings_json)?
     };
-    let config = match launch.config_path {
+    let mut config = match launch.config_path {
         Some(path) => {
             ensure!(path.is_absolute(), "config path must be absolute");
             mesh_llm_pay_lightning::Config::load(&path)?
@@ -68,6 +74,13 @@ fn bound_settings(settings_json: &str) -> Result<mesh_llm_pay_lightning::BoundSe
             )?
         }
     };
+    if launch.max_input_msat_per_million.is_some() {
+        config.policy.max_input_msat_per_million = launch.max_input_msat_per_million;
+    }
+    if launch.max_output_msat_per_million.is_some() {
+        config.policy.max_output_msat_per_million = launch.max_output_msat_per_million;
+    }
+    config.policy.validate()?;
     let wallet_binding = launch
         .wallet_binding
         .filter(|binding| !binding.trim().is_empty())
@@ -77,4 +90,30 @@ fn bound_settings(settings_json: &str) -> Result<mesh_llm_pay_lightning::BoundSe
         allow_wallet_provisioning: launch.allow_wallet_provisioning.unwrap_or(true),
         config,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ceiling_settings_replace_the_config_policy_ceiling() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("payment.json");
+        mesh_llm_pay_lightning::Config::load_or_create(&path, directory.path())?;
+        let config = |extra: &str| {
+            bound_settings(&format!(
+                r#"{{"config_path":{}{extra}}}"#,
+                serde_json::to_string(&path).unwrap()
+            ))
+        };
+        let unset = config("")?.config.policy;
+        assert_eq!(unset.max_input_msat_per_million, None);
+        assert_eq!(unset.max_output_msat_per_million, None);
+        let set = config(r#","max_input_msat_per_million":7"#)?.config.policy;
+        assert_eq!(set.max_input_msat_per_million, Some(7));
+        assert_eq!(set.max_output_msat_per_million, None);
+        assert!(config(r#","max_output_msat_per_million":0"#).is_err());
+        Ok(())
+    }
 }
