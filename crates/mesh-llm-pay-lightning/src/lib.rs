@@ -932,6 +932,7 @@ fn refusal_sentence(
     ceiling: &Ceiling,
     prepared: bool,
 ) -> String {
+    let (peer, model) = (bounded(peer), bounded(model));
     let price = format!(
         "{}: seller {peer}'s price for {model} ({} msat per million input tokens, {} per million output)",
         if prepared { "Not sent" } else { "Not paid" },
@@ -952,12 +953,38 @@ fn refusal_sentence(
     }
 }
 
-/// `value` as JSON in printable ASCII: non-ASCII characters, which can only
+/// Whether `c` passes into a header value as itself.
+fn printable(c: char) -> bool {
+    (' '..='~').contains(&c)
+}
+
+/// An identifier cut, with "...", to at most 300 header bytes once escaped,
+/// so the refusal sentence with a seller and a model always fits the
+/// 1024-byte header. A 64-character hex node id is never cut.
+fn bounded(id: &str) -> String {
+    const BUDGET: usize = 300;
+    let cost = |c: char| if printable(c) { 1 } else { 6 * c.len_utf16() };
+    if id.chars().map(cost).sum::<usize>() <= BUDGET {
+        return id.to_owned();
+    }
+    let mut used = 3;
+    let mut out: String = id
+        .chars()
+        .take_while(|&c| {
+            used += cost(c);
+            used <= BUDGET
+        })
+        .collect();
+    out.push_str("...");
+    out
+}
+
+/// `value` as JSON in printable ASCII: other characters, which can only
 /// occur inside strings, become `\u` escapes (UTF-16, as JSON specifies).
 fn ascii_json(value: &Value) -> String {
     let mut out = String::new();
     for c in value.to_string().chars() {
-        if c.is_ascii() {
+        if printable(c) {
             out.push(c);
         } else {
             let mut units = [0u16; 2];

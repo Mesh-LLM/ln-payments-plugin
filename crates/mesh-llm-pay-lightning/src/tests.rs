@@ -1630,6 +1630,25 @@ fn refusal_header_is_printable_ascii_and_keeps_the_sentence() {
     assert!(value.len() <= 1024);
     let terms: Value = serde_json::from_str(value).unwrap();
     assert_eq!(terms["refused"], "rate_above_ceiling");
-    assert!(terms["message"].as_str().unwrap().contains(&long));
+    assert!(
+        terms["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{}...", &long[..297]))
+    );
     assert!(terms.get("pricing").is_none());
+    // DEL is escaped too, and identifiers too long for the header are cut so
+    // the sentence still fits, whatever characters they hold.
+    for model in ["a\u{7f}b".to_owned(), "m".repeat(5_000), "模".repeat(5_000)] {
+        let decision = f
+            .buyer
+            .rate_refused(&"s".repeat(5_000), &model, &price(), ceiling(), false);
+        let value = &decision.response_headers[0].1;
+        assert!(value.len() <= 1024, "{} bytes", value.len());
+        assert!(value.bytes().all(|b| (32..127).contains(&b)));
+        let terms: Value = serde_json::from_str(value).unwrap();
+        assert_eq!(terms["message"].as_str(), decision.reason.as_deref());
+    }
+    assert_eq!(bounded(&"a".repeat(64)), "a".repeat(64));
+    assert!(bounded(&"a".repeat(400)).ends_with("..."));
 }
