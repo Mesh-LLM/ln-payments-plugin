@@ -632,12 +632,29 @@ mesh-llm wallet policy --mode free-only
 does not enable spending. Automatic policy retains free providers as candidates;
 it neither requires nor guarantees a paid provider. New admissions stop when
 recorded spending today reaches the daily budget; existing admissions still
-settle. There are no per-request spending caps, mandatory per-token price caps
-or extra setup calls. Seller pricing is independent.
+settle. There are no per-request spending caps or extra setup calls. Seller
+pricing is independent.
+
+Automatic policy also has a per-token rate ceiling, by default 500,000 msat per
+million input tokens and 1,500,000 per million output (the same numbers as the
+capsules admission pack's default). The policy's optional
+`max_input_msat_per_million` and `max_output_msat_per_million` replace either
+side, and so do the plugin settings of the same names, which the host's config
+screen shows with the defaults; a per-model `buy_prices` entry replaces both for
+that model. When a seller quotes rates above the ceiling, the payer pays
+nothing: no deposit is paid and the routed request, and later ones to that
+seller and model, are denied at once with HTTP 403. The deny carries one
+sentence naming the seller, the model, its price and the ceiling, and saying
+when the ceiling is the default, as its reason and in the plugin's
+`x-plugin-…-pay-terms` response header (`"refused":"rate_above_ceiling"`).
+Raising the ceiling quotes that seller again on the next request; a fresh
+connection to the seller clears its refusals.
 
 Policy persists across restarts and mesh switches. `wallet policy` without flags
 reads it without changing it, returning `mode`, `daily_budget_msat`,
-`spent_today_msat` and `remaining_daily_budget_msat`. The latter
+`max_input_msat_per_million`, `max_output_msat_per_million` (as set, or null),
+`rate_ceiling_msat_per_million` (the ceiling in effect, or null when any rate is
+paid), `spent_today_msat` and `remaining_daily_budget_msat`. The latter
 is the budget allowance, not a guarantee of wallet funds. Reading policy does not
 provision a wallet. Applications use the same `policy` command through
 `POST /api/wallet`; no second setting is required.

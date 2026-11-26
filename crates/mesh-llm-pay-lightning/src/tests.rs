@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use lightning_invoice::{Currency, InvoiceBuilder, PaymentHash, PaymentSecret};
 use mesh_llm_payments::ledger::{ApprovalMode, Policy};
+use mesh_llm_payments_types::control::DEFAULT_RATE_CEILING;
 use mesh_llm_wallet::provider::*;
 use std::sync::{
     Mutex,
@@ -124,6 +125,15 @@ struct Fixture {
     _seller_dir: tempfile::TempDir,
     _buyer_dir: tempfile::TempDir,
 }
+/// Rates at the shipped default ceiling, or a modest price when none ships.
+fn within_default_ceiling() -> Pricing {
+    let (input, output) = DEFAULT_RATE_CEILING.unwrap_or((500_000, 1_500_000));
+    Pricing {
+        input_msat_per_million: input,
+        output_msat_per_million: output,
+        cache_discount_percent: 0,
+    }
+}
 fn price() -> Pricing {
     Pricing {
         input_msat_per_million: 1_000_000,
@@ -159,6 +169,7 @@ impl Fixture {
             .set_policy(&Policy {
                 mode: ApprovalMode::Automatic,
                 daily_budget_msat: Some(100_000),
+                ..Default::default()
             })
             .unwrap();
         let seller = Arc::new(Engine::new(seller_service, "706179", 0, seller_dir.path()).unwrap());
@@ -431,6 +442,12 @@ async fn unconfigured_buyer_pays_under_automatic_policy_only_sellers_it_quoted()
     f.buyer.buying.clear();
     f.buyer.buy_peers.clear();
     f.buyer.cap_msat = 0;
+    // Within the shipped default rate ceiling, which an unconfigured buyer keeps.
+    f.seller
+        .service
+        .ledger
+        .set_pricing("model", Some(&within_default_ceiling()))
+        .unwrap();
     assert!(f.buyer.buyer_enabled("seller").await);
     // No handshake with this seller yet: its admission is refused unpaid.
     let unsolicited = f
@@ -472,6 +489,7 @@ async fn unconfigured_buyer_pays_under_automatic_policy_only_sellers_it_quoted()
         .set_policy(&Policy {
             mode: ApprovalMode::FreeOnly,
             daily_budget_msat: None,
+            ..Default::default()
         })
         .unwrap();
     assert!(!f.buyer.buyer_enabled("seller").await);
@@ -1152,6 +1170,7 @@ async fn exhaust_budget(f: &Fixture) {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000 - available),
+            ..Default::default()
         })
         .unwrap();
     assert!(!f.buyer.buyer_enabled("seller").await);
@@ -1186,6 +1205,7 @@ async fn exhausted_budget_refuses_a_route_with_a_prepared_ticket() {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000),
+            ..Default::default()
         })
         .unwrap();
     assert!(f.buyer.buyer_refusal("seller", "model").await.is_none());
@@ -1201,6 +1221,7 @@ async fn ready_ticket_is_not_claimed_once_policy_stops_buying() {
         .set_policy(&Policy {
             mode: ApprovalMode::FreeOnly,
             daily_budget_msat: None,
+            ..Default::default()
         })
         .unwrap();
     // Policy changed after the ticket became ready: it is neither claimed nor
@@ -1279,4 +1300,355 @@ async fn abandonment_cannot_replace_an_accepted_bill() {
             .await
             .is_err()
     );
+}
+
+/// A buyer with no per-model ceiling, quoting a seller priced at `pricing`.
+async fn quoted_unconfigured(pricing: Pricing) -> (Fixture, Message) {
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    f.seller
+        .service
+        .ledger
+        .set_pricing("model", Some(&pricing))
+        .unwrap();
+    f.buyer.peer_up("seller").await.unwrap();
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    (f, admission)
+}
+
+fn set_ceiling(f: &Fixture, input: Option<u64>, output: Option<u64>) {
+    f.buyer
+        .service
+        .ledger
+        .set_policy(&Policy {
+            mode: ApprovalMode::Automatic,
+            daily_budget_msat: Some(100_000),
+            max_input_msat_per_million: input,
+            max_output_msat_per_million: output,
+        })
+        .unwrap();
+}
+
+fn lab_price() -> Pricing {
+    Pricing {
+        input_msat_per_million: 50_000_000,
+        output_msat_per_million: 50_000_000,
+        cache_discount_percent: 0,
+    }
+}
+
+fn assert_rate_refused(decision: &OpenAiExchangeDecision, header: &str) {
+    assert_eq!(decision.decision, Decision::Deny);
+    assert_eq!(decision.status, Some(403));
+    let reason = decision.reason.as_deref().unwrap();
+    assert!(reason.starts_with("Not paid: ") || reason.starts_with("Not sent: "));
+    assert_eq!(reason.matches(". ").count(), 0, "one sentence: {reason}");
+    let (name, value) = &decision.response_headers[0];
+    assert_eq!(name, header);
+    assert!(value.len() <= 1024);
+    let terms: Value = serde_json::from_str(value).unwrap();
+    assert_eq!(terms["refused"], "rate_above_ceiling");
+    assert_eq!(terms["model"], "model");
+    assert_eq!(terms["message"].as_str(), decision.reason.as_deref());
+}
+
+#[tokio::test]
+async fn rates_at_the_default_ceiling_pay() {
+    let (f, admission) = quoted_unconfigured(within_default_ceiling()).await;
+    let paid = f.buyer.channel("seller", admission).await.unwrap();
+    assert!(matches!(paid.first(), Some(Message::Paid { .. })));
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn rates_over_the_ceiling_are_refused_at_once_before_any_deposit() {
+    let (f, admission) = quoted_unconfigured(lab_price()).await;
+    let Some((input, output)) = DEFAULT_RATE_CEILING else {
+        // No shipped default: the lab price is paid, as before.
+        assert!(f.buyer.channel("seller", admission).await.is_ok());
+        return;
+    };
+    assert!(input < 50_000_000 && output < 50_000_000);
+    assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+    // The waiting request is answered at once, not at its deadline.
+    let started = std::time::Instant::now();
+    let decision = f
+        .buyer
+        .buyer_wait("seller", "model", None, std::time::Duration::from_secs(20))
+        .await
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_rate_refused(&decision, &f.buyer.header);
+    let grouped = |n: u64| super::grouped(n);
+    assert_eq!(
+        decision.reason.as_deref().unwrap(),
+        format!(
+            "Not paid: seller seller's price for model (50,000,000 msat per million input tokens, 50,000,000 per million output) is above the default ceiling ({} and {} msat per million), which you have not set; raise it, or set a price for this model, to pay it.",
+            grouped(input),
+            grouped(output)
+        )
+    );
+    // And so is the next request, before any quote.
+    let next = f.buyer.rate_refusal("seller", "model").unwrap().unwrap();
+    assert_rate_refused(&next, &f.buyer.header);
+    // Another model or seller is unaffected.
+    assert!(f.buyer.rate_refusal("seller", "other").unwrap().is_none());
+    assert!(f.buyer.rate_refusal("other", "model").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_configured_ceiling_refuses_one_msat_over_it() {
+    let pricing = Pricing {
+        input_msat_per_million: 1_001,
+        output_msat_per_million: 3_000,
+        cache_discount_percent: 0,
+    };
+    let (f, admission) = quoted_unconfigured(pricing).await;
+    set_ceiling(&f, Some(1_000), Some(3_000));
+    assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+    let decision = f.buyer.rate_refusal("seller", "model").unwrap().unwrap();
+    assert_rate_refused(&decision, &f.buyer.header);
+    let terms: Value = serde_json::from_str(&decision.response_headers[0].1).unwrap();
+    assert_eq!(terms["ceiling"]["input_msat_per_million"], 1_000);
+    assert_eq!(terms["pricing"]["input_msat_per_million"], 1_001);
+    assert_eq!(terms["ceiling"]["source"], "policy");
+    assert!(
+        decision
+            .reason
+            .unwrap()
+            .contains("above your ceiling (1,000 and 3,000 msat per million);")
+    );
+}
+
+#[test]
+fn rates_are_grouped_like_the_config_screen() {
+    assert_eq!(grouped(0), "0");
+    assert_eq!(grouped(999), "999");
+    assert_eq!(grouped(1_000), "1,000");
+    assert_eq!(grouped(1_500_000), "1,500,000");
+    assert_eq!(grouped(u64::MAX), "no limit");
+}
+
+#[tokio::test]
+async fn raising_the_ceiling_forgets_the_refusal_and_quotes_again() {
+    let (f, admission) = quoted_unconfigured(lab_price()).await;
+    set_ceiling(&f, Some(1_000), Some(1_000));
+    assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_some());
+    set_ceiling(&f, Some(50_000_000), Some(50_000_000));
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_none());
+    // The connected seller is quoted again, and its admission now pays.
+    assert!(matches!(
+        f.buyer.peer_up("seller").await.unwrap().as_slice(),
+        [Message::Quote]
+    ));
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    let paid = f.buyer.channel("seller", admission).await.unwrap();
+    assert!(matches!(paid.first(), Some(Message::Paid { .. })));
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_fresh_connection_clears_the_sellers_refusals() {
+    let (f, admission) = quoted_unconfigured(lab_price()).await;
+    set_ceiling(&f, Some(1_000), Some(1_000));
+    assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_some());
+    // Cleared on disconnect, so the next request reaches `peer_up` and quotes.
+    f.buyer.peer_down("seller");
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_per_model_price_replaces_the_policy_ceiling() {
+    // The fixture's per-model ceiling (1,000,000 each way) is above a policy
+    // ceiling of 10: the model's own entry decides, and the seller is paid.
+    let f = Fixture::new();
+    set_ceiling(&f, Some(10), Some(10));
+    f.prepare().await;
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1);
+    // A per-model entry below the policy ceiling still refuses.
+    let mut f = Fixture::new();
+    set_ceiling(&f, Some(50_000_000), Some(50_000_000));
+    f.buyer.buying.insert(
+        "model".into(),
+        Pricing {
+            input_msat_per_million: 999_999,
+            ..price()
+        },
+    );
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_some());
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_ready_ticket_is_not_dispatched_above_a_lowered_ceiling() {
+    let mut f = Fixture::new();
+    ready_ticket(&f).await;
+    // The ticket was readied under the per-model ceiling; the operator then
+    // drops it, leaving a policy ceiling below the ticket's rates.
+    f.buyer.buying.clear();
+    set_ceiling(&f, Some(1_000), Some(1_000));
+    let decision = f
+        .buyer
+        .buyer_wait(
+            "seller",
+            "model",
+            None,
+            std::time::Duration::from_millis(10),
+        )
+        .await
+        .unwrap();
+    assert_rate_refused(&decision, &f.buyer.header);
+    // Its deposit was paid: the request is held unsent, not "not paid".
+    assert!(decision.reason.unwrap().starts_with("Not sent: "));
+    // The ticket is kept: a raised ceiling dispatches through it.
+    set_ceiling(&f, Some(1_000_000), Some(1_000_000));
+    let decision = f
+        .buyer
+        .buyer_wait(
+            "seller",
+            "model",
+            None,
+            std::time::Duration::from_millis(10),
+        )
+        .await
+        .unwrap();
+    assert_ne!(decision.decision, Decision::Deny);
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn rates_over_the_ceiling_are_refused_at_once_even_with_a_short_discount() {
+    let mut f = Fixture::new();
+    // The model's entry wants a 50% cache discount; the seller offers none and
+    // charges more than the entry allows: the rate refusal still answers at once.
+    f.buyer.buying.insert(
+        "model".into(),
+        Pricing {
+            input_msat_per_million: 10,
+            ..price()
+        },
+    );
+    f.seller
+        .service
+        .ledger
+        .set_pricing(
+            "model",
+            Some(&Pricing {
+                cache_discount_percent: 0,
+                ..price()
+            }),
+        )
+        .unwrap();
+    let admission = f
+        .seller
+        .channel("buyer", Message::Quote)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(f.buyer.channel("seller", admission).await.is_err());
+    assert!(f.buyer.rate_refusal("seller", "model").unwrap().is_some());
+    assert_eq!(f.network.sends.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn default_is_named_only_for_a_limit_the_payer_never_set() {
+    let Some((_, default_output)) = DEFAULT_RATE_CEILING else {
+        return;
+    };
+    let mut f = Fixture::new();
+    f.buyer.buying.clear();
+    // Input set by the payer, output left at the default; only output exceeded.
+    set_ceiling(&f, Some(10), None);
+    let over_output = Pricing {
+        input_msat_per_million: 5,
+        output_msat_per_million: default_output + 1,
+        cache_discount_percent: 0,
+    };
+    let ceiling = f
+        .buyer
+        .exceeded_ceiling("model", &over_output)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(ceiling.source, CeilingSource::Default));
+    // Exceeding the limit the payer set names it as theirs.
+    let over_input = Pricing {
+        input_msat_per_million: 11,
+        ..over_output
+    };
+    let ceiling = f
+        .buyer
+        .exceeded_ceiling("model", &over_input)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(ceiling.source, CeilingSource::Policy));
+}
+
+#[test]
+fn refusal_header_is_printable_ascii_and_keeps_the_sentence() {
+    let f = Fixture::new();
+    let ceiling = || Ceiling {
+        input: 1,
+        output: 1,
+        source: CeilingSource::Policy,
+    };
+    // A non-ASCII model name is escaped, not dropped.
+    let decision = f
+        .buyer
+        .rate_refused("seller", "模型", &price(), ceiling(), false);
+    let value = &decision.response_headers[0].1;
+    assert!(value.bytes().all(|b| (32..127).contains(&b)));
+    let terms: Value = serde_json::from_str(value).unwrap();
+    assert_eq!(terms["model"], "模型");
+    assert_eq!(terms["message"].as_str(), decision.reason.as_deref());
+    // A long model name drops the repeated terms before the sentence.
+    let long = "m".repeat(500);
+    let decision = f
+        .buyer
+        .rate_refused("seller", &long, &price(), ceiling(), false);
+    let value = &decision.response_headers[0].1;
+    assert!(value.len() <= 1024);
+    let terms: Value = serde_json::from_str(value).unwrap();
+    assert_eq!(terms["refused"], "rate_above_ceiling");
+    assert!(
+        terms["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{}...", &long[..297]))
+    );
+    assert!(terms.get("pricing").is_none());
+    // DEL is escaped too, and identifiers too long for the header are cut so
+    // the sentence still fits, whatever characters they hold.
+    for model in ["a\u{7f}b".to_owned(), "m".repeat(5_000), "模".repeat(5_000)] {
+        let decision = f
+            .buyer
+            .rate_refused(&"s".repeat(5_000), &model, &price(), ceiling(), false);
+        let value = &decision.response_headers[0].1;
+        assert!(value.len() <= 1024, "{} bytes", value.len());
+        assert!(value.bytes().all(|b| (32..127).contains(&b)));
+        let terms: Value = serde_json::from_str(value).unwrap();
+        assert_eq!(terms["message"].as_str(), decision.reason.as_deref());
+    }
+    assert_eq!(bounded(&"a".repeat(64)), "a".repeat(64));
+    assert!(bounded(&"a".repeat(400)).ends_with("..."));
 }

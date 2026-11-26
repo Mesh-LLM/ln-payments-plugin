@@ -44,6 +44,7 @@ fn open(dir: &std::path::Path) -> (Arc<MockWallet>, PaymentService) {
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000),
+            ..Default::default()
         })
         .unwrap();
     (wallet, service)
@@ -600,6 +601,7 @@ async fn admitted_final_settles_above_legacy_cap_after_daily_allowance_is_exhaus
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(1000),
+        ..Default::default()
     })?;
     service
         .accept_admission(AcceptAdmissionRequest {
@@ -711,6 +713,7 @@ async fn a_deposit_retired_while_the_wallet_opens_is_never_submitted() -> Result
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(100_000),
+        ..Default::default()
     })?;
     service
         .accept_admission(AcceptAdmissionRequest {

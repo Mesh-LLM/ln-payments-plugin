@@ -77,6 +77,7 @@ async fn unpin_is_refused_while_an_outgoing_payment_is_unresolved() -> Result<()
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(100_000),
+        ..Default::default()
     })?;
     service.ledger.propose(&terms("one", 1000))?;
     service.ledger.approve("one", crate::now_ms())?;

@@ -17,6 +17,7 @@ async fn startup_releases_approvals_that_never_reached_the_wallet() -> Result<()
             service.ledger.set_policy(&Policy {
                 mode: ApprovalMode::Automatic,
                 daily_budget_msat: Some(100_000),
+                ..Default::default()
             })?;
             service.ledger.propose(&terms("request", 700))?;
             service.approve("request").await?;
@@ -50,6 +51,7 @@ async fn cancellation_and_preparation_have_only_one_winner() -> Result<()> {
         service.ledger.set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000),
+            ..Default::default()
         })?;
         service.ledger.propose(&terms("request", 700))?;
         service.approve("request").await?;
@@ -73,6 +75,7 @@ async fn periodic_reconciliation_preserves_live_zero_charge_approval() -> Result
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(100_000),
+        ..Default::default()
     })?;
     service.ledger.propose(&terms("live", 700))?;
     service.approve("live").await?;
@@ -85,6 +88,7 @@ async fn periodic_reconciliation_preserves_live_zero_charge_approval() -> Result
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(100_000),
+        ..Default::default()
     })?;
     service.ledger.propose(&terms("pending", 700))?;
     service.ledger.cancel_unstarted("pending")?;

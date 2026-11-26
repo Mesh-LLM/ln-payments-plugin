@@ -12,6 +12,7 @@ async fn admitted_payments_settle_then_recorded_spending_blocks_new_admissions()
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(1000),
+        ..Default::default()
     })?;
     let barrier = Arc::new(tokio::sync::Barrier::new(16));
     let mut tasks = tokio::task::JoinSet::new();
@@ -84,6 +85,7 @@ async fn pending_htlc_recovers(outcome: PaymentStatus) -> Result<()> {
         service.ledger.set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(1000),
+            ..Default::default()
         })?;
         service
             .await_authorization(&terms("uncertain", 700))
@@ -132,6 +134,7 @@ async fn expired_automatic_authorization_never_calls_the_wallet() -> Result<()> 
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(100_000),
+        ..Default::default()
     })?;
     let mut request = terms("expired", 700);
     request.expires_at_ms = crate::now_ms().saturating_sub(1);

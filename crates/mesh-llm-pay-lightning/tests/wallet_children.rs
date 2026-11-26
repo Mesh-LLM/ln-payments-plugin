@@ -38,6 +38,7 @@ async fn engine(root: &Path, network: &Path, name: &str, buyer: bool) -> Engine 
         .set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000),
+            ..Default::default()
         })
         .unwrap();
     let mut engine = Engine::new(

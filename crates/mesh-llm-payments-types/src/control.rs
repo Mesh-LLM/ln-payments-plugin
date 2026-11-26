@@ -14,10 +14,27 @@ pub enum ApprovalMode {
     Automatic,
 }
 
+/// The seller rates, in msat per million input and output tokens, that
+/// `automatic` mode pays when the payer sets no ceiling of its own.
+/// `None` would pay any rate, bounded only by the daily budget. These are
+/// the numbers of the capsules admission pack's `DEFAULT_RATE_CAPS`
+/// (Mesh-LLM/capsules-plugin `crates/evidence-plugin/src/admission/price.rs`),
+/// one ceiling by ruling; change both together (capsules-plugin#396 tracks
+/// sharing it).
+pub const DEFAULT_RATE_CEILING: Option<(u64, u64)> = Some((500_000, 1_500_000));
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Policy {
     pub mode: ApprovalMode,
     pub daily_budget_msat: Option<u64>,
+    /// The highest seller input rate `automatic` mode pays, in msat per
+    /// million tokens; unset means [`DEFAULT_RATE_CEILING`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_msat_per_million: Option<u64>,
+    /// The highest seller output rate `automatic` mode pays, in msat per
+    /// million tokens; unset means [`DEFAULT_RATE_CEILING`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_msat_per_million: Option<u64>,
 }
 
 impl Policy {
@@ -29,7 +46,22 @@ impl Policy {
                 "automatic payments require a positive daily budget"
             );
         }
+        ensure!(
+            self.max_input_msat_per_million != Some(0)
+                && self.max_output_msat_per_million != Some(0),
+            "a rate ceiling must be positive"
+        );
         Ok(())
+    }
+
+    /// The input and output rate ceilings in effect: the payer's own, else
+    /// [`DEFAULT_RATE_CEILING`], else no ceiling.
+    pub fn rate_ceiling(&self) -> (u64, u64) {
+        let (input, output) = DEFAULT_RATE_CEILING.unwrap_or((u64::MAX, u64::MAX));
+        (
+            self.max_input_msat_per_million.unwrap_or(input),
+            self.max_output_msat_per_million.unwrap_or(output),
+        )
     }
 }
 

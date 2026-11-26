@@ -301,8 +301,16 @@ impl Ledger {
         } else {
             0
         };
+        // The ceiling `automatic` mode enforces, after the default; `null`
+        // when it pays any rate.
+        let (input, output) = policy.rate_ceiling();
+        let rate_ceiling = (input != u64::MAX || output != u64::MAX)
+            .then(|| serde_json::json!({"input": input, "output": output}));
         Ok(serde_json::json!({
             "mode": policy.mode, "daily_budget_msat": policy.daily_budget_msat,
+            "max_input_msat_per_million": policy.max_input_msat_per_million,
+            "max_output_msat_per_million": policy.max_output_msat_per_million,
+            "rate_ceiling_msat_per_million": rate_ceiling,
             "spent_today_msat": spent,
             "remaining_daily_budget_msat": remaining,
         }))

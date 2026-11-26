@@ -5,6 +5,7 @@ fn automatic(service: &PaymentService) -> Result<()> {
     service.ledger.set_policy(&Policy {
         mode: ApprovalMode::Automatic,
         daily_budget_msat: Some(1000),
+        ..Default::default()
     })
 }
 
@@ -275,6 +276,7 @@ async fn already_paid_send_repairs_legacy_phantom_authorizations() -> Result<()>
         service.ledger.set_policy(&Policy {
             mode: ApprovalMode::Automatic,
             daily_budget_msat: Some(100_000),
+            ..Default::default()
         })?;
         service.ledger.propose(&request)?;
         if approved {
