@@ -939,7 +939,11 @@ fn refusal_sentence(
         grouped(pricing.input_msat_per_million),
         grouped(pricing.output_msat_per_million),
     );
-    let limits = format!("{} and {}", grouped(ceiling.input), grouped(ceiling.output));
+    let limits = format!(
+        "{} and {} msat per million",
+        grouped(ceiling.input),
+        grouped(ceiling.output)
+    );
     match ceiling.source {
         CeilingSource::Default => format!(
             "{price} is above the default ceiling ({limits}), which you have not set; raise it, or set a price for this model, to pay it."

@@ -16,7 +16,11 @@ pub enum ApprovalMode {
 
 /// The seller rates, in msat per million input and output tokens, that
 /// `automatic` mode pays when the payer sets no ceiling of its own.
-/// `None` would pay any rate, bounded only by the daily budget.
+/// `None` would pay any rate, bounded only by the daily budget. These are
+/// the numbers of the capsules admission pack's `DEFAULT_RATE_CAPS`
+/// (Mesh-LLM/capsules-plugin `crates/evidence-plugin/src/admission/price.rs`),
+/// one ceiling by ruling; change both together (capsules-plugin#396 tracks
+/// sharing it).
 pub const DEFAULT_RATE_CEILING: Option<(u64, u64)> = Some((500_000, 1_500_000));
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

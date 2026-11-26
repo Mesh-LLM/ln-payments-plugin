@@ -1389,7 +1389,7 @@ async fn rates_over_the_ceiling_are_refused_at_once_before_any_deposit() {
     assert_eq!(
         decision.reason.as_deref().unwrap(),
         format!(
-            "Not paid: seller seller's price for model (50,000,000 msat per million input tokens, 50,000,000 per million output) is above the default ceiling ({} and {}), which you have not set; raise it, or set a price for this model, to pay it.",
+            "Not paid: seller seller's price for model (50,000,000 msat per million input tokens, 50,000,000 per million output) is above the default ceiling ({} and {} msat per million), which you have not set; raise it, or set a price for this model, to pay it.",
             grouped(input),
             grouped(output)
         )
@@ -1423,7 +1423,7 @@ async fn a_configured_ceiling_refuses_one_msat_over_it() {
         decision
             .reason
             .unwrap()
-            .contains("above your ceiling (1,000 and 3,000);")
+            .contains("above your ceiling (1,000 and 3,000 msat per million);")
     );
 }
 
