@@ -20,6 +20,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Jobs run 2 to 12 minutes (cold cache); a hang fails here instead of holding the runner.
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -30,27 +32,11 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
+      # These three steps are `just ci`, the local pre-push check, split for readable logs.
+      # Installing the published release needs api.github.com and runs in release-install.yml.
       - name: fmt + clippy
         run: just check
-      - name: test (serial)
+      - name: test
         run: just test
-      - name: package
-        run: just package
-      - name: install via mesh-llm plugin-manager (packaged archive + GitHub release)
-        # macOS runners share IPs and exhaust GitHub's anonymous API limit; the
-        # installer has no token hook, so macOS checks the published asset below instead.
-        run: |
-          if [ "$RUNNER_OS" != "macOS" ]; then export PAY_LIGHTNING_RELEASE_INSTALL=1; fi
-          export PAY_LIGHTNING_ARCHIVE="$(ls "$PWD"/dist/pay-lightning-v*.{zip,tar.gz} 2>/dev/null | head -1)"
-          test -n "$PAY_LIGHTNING_ARCHIVE"
-          cargo test -p mesh-llm-pay-lightning --all-features --test plugin_install -- --test-threads=1 --nocapture
-      - name: install published release asset (macOS, authenticated download)
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p rel && gh release download -R Mesh-LLM/ln-payments-plugin -D rel -p "pay-lightning-v*-$(rustc -vV | sed -n 's/host: //p').tar.gz"
-          export PAY_LIGHTNING_ARCHIVE="$(ls "$PWD"/rel/pay-lightning-v*.{zip,tar.gz} 2>/dev/null | head -1)"
-          test -n "$PAY_LIGHTNING_ARCHIVE"
-          cargo test -p mesh-llm-pay-lightning --all-features --test plugin_install packaged_archive_installs -- --test-threads=1 --nocapture
+      - name: package + install the archive via mesh-llm plugin-manager
+        run: just install-check

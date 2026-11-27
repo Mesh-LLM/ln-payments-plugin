@@ -1,0 +1,74 @@
+name: Release install
+
+# Installs the *published* release by repository name, the way `mesh-llm plugins install
+# Mesh-LLM/ln-payments-plugin` does, plus the latest lexe-wallet-plugin release it pairs with.
+# It checks outside state that no PR changes, through api.github.com calls that
+# mesh-llm's plugin-manager makes without a token; shared runner IPs exhaust that anonymous
+# limit (403), so it runs nightly and after each release instead of on PRs.
+# A failure on the schedule or after a release opens (or comments on) a `ci-red` issue.
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+  # release.yml calls this after publishing: a release created with GITHUB_TOKEN
+  # does not trigger `release: published` workflows.
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  install:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - name: install published release by repository name
+        # macOS runners share IPs and exhaust the anonymous limit most often, so macOS
+        # installs the published asset through an authenticated download instead.
+        if: runner.os != 'macOS'
+        run: just release-install
+      - name: install published release asset (macOS, authenticated download)
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p rel
+          gh release download -R "$GITHUB_REPOSITORY" -D rel -p "pay-lightning-v*-$(rustc -vV | sed -n 's/host: //p').tar.gz"
+          archives=("$PWD"/rel/pay-lightning-v*.tar.gz)
+          test -f "${archives[0]}"
+          PAY_LIGHTNING_ARCHIVE="${archives[0]}" cargo test -p mesh-llm-pay-lightning --all-features --test plugin_install -- --exact packaged_archive_installs --nocapture
+
+  report:
+    needs: install
+    if: failure() && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: open or update the ci-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create ci-red --color B60205 --description 'A post-merge or nightly check failed' 2>/dev/null || true
+          title='ci-red: Release install failed'
+          n=$(gh issue list --state open --label ci-red --search "\"$title\" in:title" --json number --jq '.[0].number')
+          body="Release install failed on \`${GITHUB_EVENT_NAME}\` at ${GITHUB_SHA}: $RUN_URL"
+          if [ -n "$n" ]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --label ci-red --body "$body"; fi
