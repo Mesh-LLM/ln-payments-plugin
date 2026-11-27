@@ -13,6 +13,11 @@ on:
   # release.yml calls this after publishing: a release created with GITHUB_TOKEN
   # does not trigger `release: published` workflows.
   workflow_call:
+    inputs:
+      tag:
+        description: Release tag whose assets the macOS check downloads (default latest)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -46,9 +51,10 @@ jobs:
         if: runner.os == 'macOS'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
         run: |
           mkdir -p rel
-          gh release download -R "$GITHUB_REPOSITORY" -D rel -p "pay-lightning-v*-$(rustc -vV | sed -n 's/host: //p').tar.gz"
+          gh release download ${TAG:+"$TAG"} -R "$GITHUB_REPOSITORY" -D rel -p "pay-lightning-v*-$(rustc -vV | sed -n 's/host: //p').tar.gz"
           archives=("$PWD"/rel/pay-lightning-v*.tar.gz)
           test -f "${archives[0]}"
           PAY_LIGHTNING_ARCHIVE="${archives[0]}" cargo test -p mesh-llm-pay-lightning --all-features --test plugin_install -- --exact packaged_archive_installs --nocapture

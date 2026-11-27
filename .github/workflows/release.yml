@@ -107,3 +107,5 @@ jobs:
       contents: read
       issues: write
     uses: ./.github/workflows/release-install.yml
+    with:
+      tag: ${{ github.ref_name }}

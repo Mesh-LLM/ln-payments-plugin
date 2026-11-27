@@ -13,7 +13,8 @@ check:
 
 # Parallel tests open many ledgers and sockets at once: under macOS's default soft limit of
 # 256 open files they fail with "Too many open files (os error 24)", so raise it first.
-raise_fd_limit := if os_family() == "unix" { 'if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 8192 ]; then ulimit -Sn 8192; fi;' } else { "" }
+# Capped at the hard limit, which an unprivileged shell cannot raise.
+raise_fd_limit := if os_family() == "unix" { 'want=8192; hard=$(ulimit -Hn); if [ "$hard" != unlimited ] && [ "$hard" -lt "$want" ]; then want=$hard; fi; if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt "$want" ]; then ulimit -Sn "$want"; fi;' } else { "" }
 
 # Offline: unset the release-install switch so an inherited value cannot add network calls.
 test:
