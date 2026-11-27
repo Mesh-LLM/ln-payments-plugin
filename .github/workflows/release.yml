@@ -30,7 +30,7 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: tar.gz }
           - { os: windows-2022, target: x86_64-pc-windows-msvc, exe: .exe, ext: zip }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -49,6 +49,9 @@ jobs:
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           test "$GITHUB_REF_NAME" = "v$v"
       - name: Verify
+        # On PRs, ci.yml already runs check + test on Linux x86_64, macOS and Windows;
+        # only the target CI does not cover verifies here.
+        if: github.event_name != 'pull_request' || matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           just check
           just test
@@ -96,3 +99,13 @@ jobs:
             --title "pay-lightning $GITHUB_REF_NAME" \
             --notes 'pay-lightning plugin for mesh-llm. Pair with a wallet.v1 provider (lexe-wallet). See README for setup.' \
             ./*.tar.gz ./*.zip ./*.sha256
+
+  # Install what was just published by repository name, as users do.
+  release-install:
+    needs: publish
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/release-install.yml
+    with:
+      tag: ${{ github.ref_name }}

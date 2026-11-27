@@ -78,9 +78,13 @@ supported by the plugin.
 
 ```sh
 just check                # formatting and Clippy
-just test                 # full workspace tests, run serially
+just test                 # full workspace tests, in parallel
 just package              # release binary and installable archive in dist/
+just ci                   # what each PR's CI job runs: check, test, package and install the archive
 ```
+
+Run `just ci` before pushing. `just release-install` installs the published release by
+repository name over the network; CI runs it nightly and after each release, not on PRs.
 
 To install a local package:
 
