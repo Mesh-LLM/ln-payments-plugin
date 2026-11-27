@@ -1,4 +1,4 @@
-# ln-payments-plugin — developer preview; use caution and small amounts. `just test` is serial: the suite is flaky in parallel.
+# ln-payments-plugin — developer preview; use caution and small amounts.
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 target := `rustc -vV | sed -n 's/^host: //p'`
@@ -11,9 +11,13 @@ check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+# Parallel tests open many ledgers and sockets at once: under macOS's default soft limit of
+# 256 open files they fail with "Too many open files (os error 24)", so raise it first.
+raise_fd_limit := if os_family() == "unix" { 'if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 8192 ]; then ulimit -Sn 8192; fi;' } else { "" }
+
 # Offline: unset the release-install switch so an inherited value cannot add network calls.
 test:
-    env -u PAY_LIGHTNING_RELEASE_INSTALL cargo test --workspace --all-features -- --test-threads=1
+    {{raise_fd_limit}} env -u PAY_LIGHTNING_RELEASE_INSTALL cargo test --workspace --all-features
 
 build:
     cargo build --release -p mesh-llm-pay-lightning --bin pay-lightning

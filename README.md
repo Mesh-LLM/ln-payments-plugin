@@ -78,7 +78,7 @@ supported by the plugin.
 
 ```sh
 just check                # formatting and Clippy
-just test                 # full workspace tests, run serially
+just test                 # full workspace tests, in parallel
 just package              # release binary and installable archive in dist/
 just ci                   # what each PR's CI job runs: check, test, package and install the archive
 ```

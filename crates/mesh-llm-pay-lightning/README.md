@@ -127,8 +127,8 @@ unconsumed tickets rather than replaying inference.
 
 Run `just check`, `just test`, `just build`, `just package` from the repository
 root. `package` stages the installable utility under `dist/`; the tests run with
-`--all-features` so the `offline-mock` fixtures are included, serially. Raise
-the macOS file limit with `ulimit -n 8192` before the full suite. The opt-in
+`--all-features` so the `offline-mock` fixtures are included, in parallel; `just test`
+raises the open-file limit to 8192 first, since macOS's default of 256 is too low for it. The opt-in
 `offline-mock` binary uses signed synthetic invoices and an explicit shared file
 network. It never contacts wallet services or moves funds. Its
 `MESH_LLM_OFFLINE_WALLET_CHILD` mode serves only `wallet.v1` for legacy subprocess
